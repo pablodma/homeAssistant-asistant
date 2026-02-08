@@ -1,0 +1,1 @@
+"""HomeAI Assistant application module."""

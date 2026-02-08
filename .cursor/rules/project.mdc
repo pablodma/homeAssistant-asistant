@@ -1,0 +1,131 @@
+---
+description: Reglas del proyecto HomeAI Assistant (Bot Service)
+globs:
+  - "**/*"
+---
+
+# HomeAI Assistant (Bot Service)
+
+## Proyecto
+- **Nombre**: HomeAI Assistant Bot
+- **Repositorio**: git@github.com:pablodma/homeAssistant-asistant.git
+- **Stack**: FastAPI + OpenAI + LangChain
+- **Deploy**: Railway
+- **Fase actual**: 1 (POC)
+
+## Arquitectura Polyrepo
+
+```
+Estructura local:
+d:\Proyectos\homeAsiss\           ← Carpeta contenedora (NO es repo)
+├── homeai-api/                   ← Backend FastAPI → Railway
+├── homeai-web/                   ← Frontend Next.js → Vercel
+└── homeai-assis/                 ← ESTE PROYECTO (Bot WhatsApp → Railway)
+
+Repositorios GitHub:
+├── homeAssistant-backend         ← Backend
+├── homeAssistant-frontend        ← Frontend
+└── homeAssistant-asistant        ← ESTE REPO
+```
+
+## Comunicación entre servicios
+- WhatsApp → Bot: Webhook (POST /webhook)
+- Bot → Backend: REST via `BACKEND_API_URL`
+- Bot → OpenAI: API para LLM
+- Bot → PostgreSQL: Memoria de chat y logs
+
+## Estructura
+
+```
+homeai-assis/
+├── src/app/
+│   ├── main.py              # FastAPI entry point
+│   ├── config/              # Settings, database
+│   ├── whatsapp/            # Webhook, client, types
+│   ├── agents/              # Router + sub-agentes
+│   ├── services/            # Conversation, prompts, logs
+│   └── repositories/        # Data access
+├── tests/
+├── pyproject.toml
+└── Dockerfile
+```
+
+## Agentes Implementados
+
+### Router Agent (Orquestador)
+- Analiza mensajes y decide qué sub-agente usar
+- Usa keyword detection + LLM fallback
+- Prompt editable desde base de datos
+
+### Sub-agentes
+| Agente | Función | Backend Endpoint |
+|--------|---------|------------------|
+| Finance | Gastos y presupuestos | `/agent/expense`, `/agent/report` |
+| Calendar | Eventos y agenda | `/agent/calendar/*` |
+| Reminder | Recordatorios | Directo a DB |
+| Shopping | Listas de compras | Directo a DB |
+| Vehicle | Vehículos y mantenimiento | Directo a DB |
+
+## Flujo de Mensaje
+
+```
+Usuario (WhatsApp)
+       │
+       ▼
+┌──────────────┐
+│   Webhook    │ ← POST /webhook
+└──────┬───────┘
+       │
+       ▼
+┌──────────────┐
+│ RouterAgent  │ ← Decide qué agente usar
+└──────┬───────┘
+       │
+       ▼
+┌──────────────┐
+│  Sub-Agent   │ ← Ejecuta la acción
+└──────┬───────┘
+       │
+       ▼
+┌──────────────┐
+│   Backend    │ ← API calls (finance, calendar)
+└──────────────┘
+```
+
+## Multi-tenancy (CRÍTICO)
+- El `tenant_id` se determina por el número de WhatsApp
+- Por ahora usa `DEFAULT_TENANT_ID` del .env
+- TODA query a PostgreSQL DEBE incluir `WHERE tenant_id = $tenant_id`
+
+## Variables de Entorno Requeridas
+
+| Variable | Descripción |
+|----------|-------------|
+| `WHATSAPP_PHONE_NUMBER_ID` | ID del número de WhatsApp |
+| `WHATSAPP_VERIFY_TOKEN` | Token para verificar webhook |
+| `WHATSAPP_ACCESS_TOKEN` | Token de Meta Business |
+| `OPENAI_API_KEY` | API key de OpenAI |
+| `DATABASE_URL` | PostgreSQL connection string |
+| `BACKEND_API_URL` | URL del backend API |
+
+## Debugging con Railway MCP
+
+Usar las herramientas MCP de Railway para debugging:
+
+```
+Railway_HomeAs-get-logs(workspacePath="d:\\Proyectos\\homeAsiss\\homeai-assis", logType="deploy", lines=100)
+```
+
+## Testing de Endpoints
+
+- Usar Shell para ejecutar curl directamente
+- No pedir al usuario que pruebe manualmente
+- Para webhook local, usar ngrok
+
+## Convenciones de Código
+
+- Python 3.11+
+- Type hints obligatorios
+- Docstrings en todas las funciones públicas
+- Async/await para operaciones I/O
+- structlog para logging

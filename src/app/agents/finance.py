@@ -1,0 +1,403 @@
+"""Finance Agent - Expense and budget management."""
+
+import json
+from datetime import datetime, timedelta
+from typing import Any, Optional
+
+import httpx
+import structlog
+from openai import AsyncOpenAI
+
+from ..config import get_settings
+from .base import AgentResult, BaseAgent
+
+logger = structlog.get_logger()
+
+
+class FinanceAgent(BaseAgent):
+    """Agent for managing expenses and budgets."""
+
+    name = "finance"
+
+    def __init__(self):
+        """Initialize the finance agent."""
+        super().__init__()
+        self.client = AsyncOpenAI(api_key=self.settings.openai_api_key)
+
+    async def process(
+        self,
+        message: str,
+        phone: str,
+        tenant_id: str,
+        history: list,
+        **kwargs,
+    ) -> AgentResult:
+        """Process a finance-related message.
+
+        Args:
+            message: The user's message.
+            phone: The user's phone number.
+            tenant_id: The tenant ID.
+            history: Conversation history.
+
+        Returns:
+            The agent's response.
+        """
+        logger.info("Finance agent processing", message=message[:50])
+
+        prompt = await self.get_prompt(tenant_id)
+
+        # Build messages
+        messages = [
+            {"role": "system", "content": prompt},
+        ]
+
+        # Add history context
+        for msg in history[-4:]:
+            messages.append({"role": msg.role, "content": msg.content})
+
+        messages.append({"role": "user", "content": message})
+
+        # Define tools
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "registrar_gasto",
+                    "description": "Registra un nuevo gasto",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "amount": {"type": "number", "description": "Monto del gasto"},
+                            "category": {"type": "string", "description": "Categoría del gasto"},
+                            "description": {"type": "string", "description": "Descripción opcional"},
+                            "expense_date": {"type": "string", "description": "Fecha YYYY-MM-DD (opcional)"},
+                        },
+                        "required": ["amount", "category"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "consultar_reporte",
+                    "description": "Consulta reporte de gastos",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "period": {
+                                "type": "string",
+                                "enum": ["day", "week", "month", "year"],
+                                "description": "Período del reporte",
+                            },
+                            "category": {"type": "string", "description": "Filtrar por categoría"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "consultar_presupuesto",
+                    "description": "Consulta estado del presupuesto",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "category": {"type": "string", "description": "Categoría específica"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "eliminar_gasto",
+                    "description": "Elimina un gasto específico",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "amount": {"type": "number", "description": "Monto del gasto"},
+                            "category": {"type": "string", "description": "Categoría del gasto"},
+                            "description": {"type": "string", "description": "Descripción del gasto"},
+                            "expense_date": {"type": "string", "description": "Fecha YYYY-MM-DD"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "eliminar_gasto_masivo",
+                    "description": "Elimina múltiples gastos de un período",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "period": {
+                                "type": "string",
+                                "enum": ["today", "week", "month", "year", "all"],
+                                "description": "Período a eliminar",
+                            },
+                            "category": {"type": "string", "description": "Categoría específica"},
+                            "confirm": {"type": "boolean", "description": "Confirmación requerida"},
+                        },
+                        "required": ["period", "confirm"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "modificar_gasto",
+                    "description": "Modifica un gasto existente",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "search_amount": {"type": "number", "description": "Monto actual"},
+                            "search_category": {"type": "string", "description": "Categoría actual"},
+                            "search_description": {"type": "string", "description": "Descripción actual"},
+                            "search_date": {"type": "string", "description": "Fecha actual"},
+                            "new_amount": {"type": "number", "description": "Nuevo monto"},
+                            "new_category": {"type": "string", "description": "Nueva categoría"},
+                            "new_description": {"type": "string", "description": "Nueva descripción"},
+                        },
+                    },
+                },
+            },
+        ]
+
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.settings.openai_model,
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                max_tokens=1000,
+                temperature=0.3,
+            )
+
+            choice = response.choices[0]
+            tokens_in = response.usage.prompt_tokens if response.usage else None
+            tokens_out = response.usage.completion_tokens if response.usage else None
+
+            # Check if tool was called
+            if choice.message.tool_calls:
+                tool_call = choice.message.tool_calls[0]
+                tool_name = tool_call.function.name
+                tool_args = json.loads(tool_call.function.arguments)
+
+                logger.info(f"Finance tool call: {tool_name}", args=tool_args)
+
+                # Execute the tool
+                tool_result = await self._execute_tool(tool_name, tool_args, tenant_id)
+
+                # Generate response based on tool result
+                response_text = await self._generate_response(
+                    tool_name, tool_args, tool_result, message
+                )
+
+                return AgentResult(
+                    response=response_text,
+                    agent_used=self.name,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                    metadata={"tool": tool_name, "result": tool_result},
+                )
+
+            # Direct response
+            return AgentResult(
+                response=choice.message.content or "No pude procesar tu solicitud.",
+                agent_used=self.name,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+            )
+
+        except Exception as e:
+            logger.error("Finance agent error", error=str(e))
+            return AgentResult(
+                response="Hubo un problema procesando tu solicitud de finanzas.",
+                agent_used=self.name,
+            )
+
+    async def _execute_tool(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        tenant_id: str,
+    ) -> dict[str, Any]:
+        """Execute a finance tool by calling the backend API.
+
+        Args:
+            tool_name: Name of the tool.
+            args: Tool arguments.
+            tenant_id: The tenant ID.
+
+        Returns:
+            Tool execution result.
+        """
+        base_url = f"{self.settings.backend_api_url}/api/v1/tenants/{tenant_id}"
+        headers = {"Authorization": f"Bearer {self.settings.backend_api_key}"}
+
+        async with httpx.AsyncClient() as client:
+            try:
+                if tool_name == "registrar_gasto":
+                    response = await client.post(
+                        f"{base_url}/agent/expense",
+                        params=args,
+                        headers=headers,
+                        timeout=30.0,
+                    )
+                elif tool_name == "consultar_reporte":
+                    response = await client.get(
+                        f"{base_url}/agent/report",
+                        params=args,
+                        headers=headers,
+                        timeout=30.0,
+                    )
+                elif tool_name == "consultar_presupuesto":
+                    response = await client.get(
+                        f"{base_url}/agent/budget",
+                        params=args,
+                        headers=headers,
+                        timeout=30.0,
+                    )
+                elif tool_name == "eliminar_gasto":
+                    response = await client.delete(
+                        f"{base_url}/agent/expense",
+                        params=args,
+                        headers=headers,
+                        timeout=30.0,
+                    )
+                elif tool_name == "eliminar_gasto_masivo":
+                    response = await client.delete(
+                        f"{base_url}/agent/expenses/bulk",
+                        params=args,
+                        headers=headers,
+                        timeout=30.0,
+                    )
+                elif tool_name == "modificar_gasto":
+                    response = await client.patch(
+                        f"{base_url}/agent/expense",
+                        params=args,
+                        headers=headers,
+                        timeout=30.0,
+                    )
+                else:
+                    return {"success": False, "error": f"Unknown tool: {tool_name}"}
+
+                if response.status_code == 200:
+                    return {"success": True, "data": response.json()}
+                else:
+                    return {
+                        "success": False,
+                        "error": response.text,
+                        "status_code": response.status_code,
+                    }
+
+            except Exception as e:
+                logger.error(f"Tool execution failed: {tool_name}", error=str(e))
+                return {"success": False, "error": str(e)}
+
+    async def _generate_response(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        result: dict[str, Any],
+        original_message: str,
+    ) -> str:
+        """Generate a user-friendly response from tool result.
+
+        Args:
+            tool_name: Name of the tool.
+            args: Tool arguments.
+            result: Tool execution result.
+            original_message: The original user message.
+
+        Returns:
+            Formatted response.
+        """
+        if not result.get("success"):
+            error = result.get("error", "Error desconocido")
+            return f"❌ No pude completar la operación: {error}"
+
+        data = result.get("data", {})
+
+        if tool_name == "registrar_gasto":
+            amount = args.get("amount", 0)
+            category = args.get("category", "")
+            alert = data.get("alert", "")
+            response = f"✅ Registré un gasto de ${amount:,.0f} en {category}."
+            if alert:
+                response += f"\n\n⚠️ {alert}"
+            return response
+
+        elif tool_name == "consultar_reporte":
+            if not data:
+                return "📊 No hay gastos registrados en este período."
+
+            total = data.get("total", 0)
+            by_category = data.get("by_category", [])
+            period = args.get("period", "month")
+
+            period_names = {
+                "day": "hoy",
+                "week": "esta semana",
+                "month": "este mes",
+                "year": "este año",
+            }
+
+            response = f"📊 Resumen de gastos {period_names.get(period, period)}:\n\n"
+            for cat in by_category[:5]:
+                name = cat.get("category", "")
+                amount = cat.get("total", 0)
+                pct = (amount / total * 100) if total > 0 else 0
+                response += f"• {name}: ${amount:,.0f} ({pct:.0f}%)\n"
+
+            response += f"\n💰 Total: ${total:,.0f}"
+            return response
+
+        elif tool_name == "consultar_presupuesto":
+            budgets = data.get("budgets", [])
+            if not budgets:
+                return "📋 No tenés presupuestos configurados."
+
+            response = "📋 Estado de tus presupuestos:\n\n"
+            for b in budgets:
+                name = b.get("category", "")
+                limit = b.get("limit", 0)
+                spent = b.get("spent", 0)
+                remaining = b.get("remaining", 0)
+                pct = b.get("percentage", 0)
+
+                status = "✓" if pct < 80 else "⚠️" if pct < 100 else "🔴"
+                response += f"• {name}: ${limit:,.0f}/mes\n"
+                response += f"  └ Gastaste ${spent:,.0f} - te quedan ${remaining:,.0f} {status} ({pct:.0f}%)\n\n"
+
+            return response.strip()
+
+        elif tool_name == "eliminar_gasto":
+            deleted = data.get("deleted", False)
+            if deleted:
+                amount = data.get("amount", 0)
+                category = data.get("category", "")
+                return f"🗑️ Gasto eliminado: ${amount:,.0f} en {category}"
+            else:
+                return "❌ No encontré un gasto que coincida con esos criterios."
+
+        elif tool_name == "eliminar_gasto_masivo":
+            count = data.get("deleted_count", 0)
+            return f"🗑️ Se eliminaron {count} gasto(s)."
+
+        elif tool_name == "modificar_gasto":
+            modified = data.get("modified", False)
+            if modified:
+                changes = data.get("changes", {})
+                response = "✏️ Gasto modificado:\n"
+                for field, change in changes.items():
+                    old = change.get("old", "")
+                    new = change.get("new", "")
+                    response += f"• {field}: {old} → {new}\n"
+                return response.strip()
+            else:
+                return "❌ No encontré el gasto para modificar."
+
+        return "✓ Operación completada."

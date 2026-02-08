@@ -1,0 +1,1 @@
+"""HomeAI Assistant Bot Service."""
