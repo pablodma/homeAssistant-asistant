@@ -4,128 +4,299 @@ globs:
   - "**/*"
 ---
 
-# HomeAI Assistant (Bot Service)
+# HomeAI Assistant - Bot Service
 
 ## Proyecto
 - **Nombre**: HomeAI Assistant Bot
 - **Repositorio**: git@github.com:pablodma/homeAssistant-asistant.git
-- **Stack**: FastAPI + OpenAI + LangChain
-- **Deploy**: Railway
-- **Fase actual**: 1 (POC)
+- **Stack**: FastAPI + OpenAI (gpt-4.1-mini) + LangChain + asyncpg
+- **Deploy**: Railway (https://homeai-assis-production.up.railway.app)
+- **Fase actual**: 2 (MVP - Código propio, migrado de N8N)
 
-## Arquitectura Polyrepo
+## Arquitectura del Bot
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    FLUJO DE MENSAJE                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Usuario                                                         │
+│  (WhatsApp)                                                      │
+│      │                                                           │
+│      ▼                                                           │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │                    WEBHOOK (POST /webhook)                │   │
+│  │  - Verifica signature de Meta                            │   │
+│  │  - Parsea payload WhatsApp                               │   │
+│  │  - Ejecuta en background task                            │   │
+│  └────────────────────────┬─────────────────────────────────┘   │
+│                           │                                      │
+│                           ▼                                      │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │                    ROUTER AGENT                           │   │
+│  │  - Keyword detection (rápido, sin LLM)                   │   │
+│  │  - LLM fallback con tool calling                         │   │
+│  │  - Decide qué sub-agente usar                            │   │
+│  └────────────────────────┬─────────────────────────────────┘   │
+│                           │                                      │
+│           ┌───────────────┼───────────────┐                     │
+│           ▼               ▼               ▼                     │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐                │
+│  │   Finance   │ │  Calendar   │ │  Reminder   │ ...            │
+│  │   Agent     │ │   Agent     │ │   Agent     │                │
+│  └──────┬──────┘ └──────┬──────┘ └──────┬──────┘                │
+│         │               │               │                        │
+│         ▼               ▼               ▼                        │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐                │
+│  │ Backend API │ │ Backend API │ │ PostgreSQL  │                │
+│  │ (finance)   │ │ (calendar)  │ │ (directo)   │                │
+│  └─────────────┘ └─────────────┘ └─────────────┘                │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Polyrepo
 
 ```
 Estructura local:
 d:\Proyectos\homeAsiss\           ← Carpeta contenedora (NO es repo)
 ├── homeai-api/                   ← Backend FastAPI → Railway
 ├── homeai-web/                   ← Frontend Next.js → Vercel
-└── homeai-assis/                 ← ESTE PROYECTO (Bot WhatsApp → Railway)
+├── homeai-assis/                 ← ESTE PROYECTO (Bot → Railway)
+└── .credentials/                 ← Credenciales locales
 
 Repositorios GitHub:
-├── homeAssistant-backend         ← Backend
-├── homeAssistant-frontend        ← Frontend
+├── homeAssistant-backend         
+├── homeAssistant-frontend        
 └── homeAssistant-asistant        ← ESTE REPO
 ```
 
-## Comunicación entre servicios
-- WhatsApp → Bot: Webhook (POST /webhook)
-- Bot → Backend: REST via `BACKEND_API_URL`
-- Bot → OpenAI: API para LLM
-- Bot → PostgreSQL: Memoria de chat y logs
-
-## Estructura
+## Estructura del Proyecto
 
 ```
 homeai-assis/
 ├── src/app/
-│   ├── main.py              # FastAPI entry point
-│   ├── config/              # Settings, database
-│   ├── whatsapp/            # Webhook, client, types
-│   ├── agents/              # Router + sub-agentes
-│   ├── services/            # Conversation, prompts, logs
-│   └── repositories/        # Data access
+│   ├── main.py                   # FastAPI entry point
+│   ├── config/
+│   │   ├── settings.py           # Pydantic settings
+│   │   └── database.py           # asyncpg pool
+│   ├── whatsapp/
+│   │   ├── types.py              # Pydantic models para payloads
+│   │   ├── client.py             # WhatsAppClient (enviar mensajes)
+│   │   └── webhook.py            # Router de webhook
+│   ├── agents/
+│   │   ├── base.py               # BaseAgent abstracto
+│   │   ├── router.py             # RouterAgent (orquestador)
+│   │   ├── finance.py            # FinanceAgent
+│   │   ├── calendar.py           # CalendarAgent
+│   │   ├── reminder.py           # ReminderAgent
+│   │   ├── shopping.py           # ShoppingAgent
+│   │   └── vehicle.py            # VehicleAgent
+│   ├── services/
+│   │   ├── conversation.py       # Manejo de memoria de chat
+│   │   ├── prompt_loader.py      # Carga prompts desde DB
+│   │   └── interaction_log.py    # Logging de interacciones
+│   └── repositories/
+│       └── memory.py             # CRUD para chat memory
 ├── tests/
 ├── pyproject.toml
-└── Dockerfile
+├── Dockerfile
+└── README.md
 ```
 
 ## Agentes Implementados
 
 ### Router Agent (Orquestador)
-- Analiza mensajes y decide qué sub-agente usar
-- Usa keyword detection + LLM fallback
-- Prompt editable desde base de datos
+- **Función**: Decide qué sub-agente debe manejar cada mensaje
+- **Método**: Keyword detection + LLM fallback (gpt-4.1-mini con tool calling)
+- **Prompt**: Editable desde base de datos (`agent_prompts` table)
 
-### Sub-agentes
-| Agente | Función | Backend Endpoint |
-|--------|---------|------------------|
-| Finance | Gastos y presupuestos | `/agent/expense`, `/agent/report` |
-| Calendar | Eventos y agenda | `/agent/calendar/*` |
-| Reminder | Recordatorios | Directo a DB |
-| Shopping | Listas de compras | Directo a DB |
-| Vehicle | Vehículos y mantenimiento | Directo a DB |
+### Sub-Agentes
 
-## Flujo de Mensaje
+| Agente | Keywords | Backend/DB | Funcionalidad |
+|--------|----------|------------|---------------|
+| **Finance** | `gast`, `compra`, `pagu`, `presupuesto` | Backend API | Gastos, reportes, presupuestos |
+| **Calendar** | `agenda`, `evento`, `reunión`, `cita`, `turno` | Backend API | Eventos, agenda |
+| **Reminder** | `recorda`, `avisa`, `alerta` | PostgreSQL directo | Recordatorios |
+| **Shopping** | `lista`, `super`, `compras`, `agreg`, `falta` | PostgreSQL directo | Listas de compras |
+| **Vehicle** | `auto`, `coche`, `service`, `nafta`, `combustible` | PostgreSQL directo | Vehículos, mantenimiento |
 
+## Comunicación con Backend
+
+El bot llama al backend para Finance y Calendar:
+
+```python
+# Finance - Registrar gasto
+POST {BACKEND_API_URL}/api/v1/tenants/{tenant_id}/agent/expense
+Authorization: Bearer {SERVICE_TOKEN}
+{
+    "description": "Supermercado",
+    "amount": 5000,
+    "user_phone": "+5491155555555"
+}
+
+# Calendar - Crear evento  
+POST {BACKEND_API_URL}/api/v1/tenants/{tenant_id}/agent/calendar/events
+Authorization: Bearer {SERVICE_TOKEN}
+{
+    "title": "Dentista",
+    "start_datetime": "2026-02-10T10:00:00",
+    "user_phone": "+5491155555555"
+}
 ```
-Usuario (WhatsApp)
-       │
-       ▼
-┌──────────────┐
-│   Webhook    │ ← POST /webhook
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│ RouterAgent  │ ← Decide qué agente usar
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│  Sub-Agent   │ ← Ejecuta la acción
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│   Backend    │ ← API calls (finance, calendar)
-└──────────────┘
+
+## Acceso Directo a DB
+
+Reminders, Shopping y Vehicles escriben directo a PostgreSQL:
+
+| Tabla | Agente | Campos principales |
+|-------|--------|-------------------|
+| `reminders` | Reminder | tenant_id, user_phone, title, due_at, recurrence |
+| `shopping_items` | Shopping | tenant_id, list_name, item_name, quantity, purchased |
+| `vehicles` | Vehicle | tenant_id, plate, brand, model, year |
+| `vehicle_services` | Vehicle | vehicle_id, service_type, date, mileage, cost |
+| `vehicle_reminders` | Vehicle | vehicle_id, type, due_date, mileage_due |
+
+## Memoria de Conversación
+
+- **Tabla**: `chat_sessions` + `chat_messages`
+- **Expiración**: 24 horas de inactividad
+- **Límite**: Últimos 10 mensajes como contexto para LLM
+
+## Logging de Interacciones
+
+Cada interacción se guarda en `agent_interactions`:
+
+| Campo | Descripción |
+|-------|-------------|
+| `tenant_id` | Tenant del usuario |
+| `user_phone` | Número de WhatsApp |
+| `message_in` | Mensaje recibido |
+| `message_out` | Respuesta enviada |
+| `agent_used` | Agente que procesó |
+| `tokens_in/out` | Tokens consumidos |
+| `response_time_ms` | Tiempo de respuesta |
+| `metadata` | JSON con detalles adicionales |
+
+## Variables de Entorno
+
+| Variable | Descripción | Requerida |
+|----------|-------------|-----------|
+| `WHATSAPP_PHONE_NUMBER_ID` | ID del número de WhatsApp | ✅ |
+| `WHATSAPP_VERIFY_TOKEN` | Token para verificar webhook | ✅ |
+| `WHATSAPP_ACCESS_TOKEN` | Token de Meta Business API | ✅ |
+| `OPENAI_API_KEY` | API key de OpenAI | ✅ |
+| `DATABASE_URL` | PostgreSQL (interno Railway) | ✅ |
+| `DATABASE_PUBLIC_URL` | PostgreSQL (acceso externo) | Para migraciones |
+| `BACKEND_API_URL` | URL del backend | ✅ |
+| `DEFAULT_TENANT_ID` | Tenant por defecto (POC) | ✅ |
+| `DEFAULT_SERVICE_TOKEN` | Token para llamadas al backend | ✅ |
+| `PORT` | Puerto (Railway lo setea) | Auto |
+
+## Webhook WhatsApp
+
+### Verificación (GET /webhook)
+```
+GET /webhook?hub.mode=subscribe&hub.verify_token=TOKEN&hub.challenge=CHALLENGE
+→ Retorna hub.challenge si token es válido
 ```
 
-## Multi-tenancy (CRÍTICO)
-- El `tenant_id` se determina por el número de WhatsApp
-- Por ahora usa `DEFAULT_TENANT_ID` del .env
-- TODA query a PostgreSQL DEBE incluir `WHERE tenant_id = $tenant_id`
+### Mensajes (POST /webhook)
+```
+POST /webhook
+Content-Type: application/json
 
-## Variables de Entorno Requeridas
-
-| Variable | Descripción |
-|----------|-------------|
-| `WHATSAPP_PHONE_NUMBER_ID` | ID del número de WhatsApp |
-| `WHATSAPP_VERIFY_TOKEN` | Token para verificar webhook |
-| `WHATSAPP_ACCESS_TOKEN` | Token de Meta Business |
-| `OPENAI_API_KEY` | API key de OpenAI |
-| `DATABASE_URL` | PostgreSQL connection string |
-| `BACKEND_API_URL` | URL del backend API |
+{
+  "entry": [{
+    "changes": [{
+      "value": {
+        "messages": [{
+          "from": "5491155555555",
+          "type": "text",
+          "text": {"body": "Gasté 5000 en el super"}
+        }]
+      }
+    }]
+  }]
+}
+```
 
 ## Debugging con Railway MCP
 
-Usar las herramientas MCP de Railway para debugging:
+```python
+# Obtener logs de deploy
+Railway_HomeAs-get-logs(
+    workspacePath="d:\\Proyectos\\homeAsiss\\homeai-assis", 
+    logType="deploy", 
+    lines=100
+)
 
+# Buscar errores
+Railway_HomeAs-get-logs(
+    workspacePath="d:\\Proyectos\\homeAsiss\\homeai-assis", 
+    logType="deploy", 
+    filter="@level:error"
+)
+
+# Ver variables
+Railway_HomeAs-list-variables(
+    workspacePath="d:\\Proyectos\\homeAsiss\\homeai-assis"
+)
 ```
-Railway_HomeAs-get-logs(workspacePath="d:\\Proyectos\\homeAsiss\\homeai-assis", logType="deploy", lines=100)
+
+## Prompts Editables
+
+Los prompts se cargan desde la tabla `agent_prompts`:
+
+```sql
+SELECT prompt_content 
+FROM agent_prompts 
+WHERE tenant_id = $1 AND agent_name = $2 AND is_active = true
+ORDER BY version DESC LIMIT 1;
 ```
 
-## Testing de Endpoints
-
-- Usar Shell para ejecutar curl directamente
-- No pedir al usuario que pruebe manualmente
-- Para webhook local, usar ngrok
+Si no hay prompt en DB, usa el default hardcodeado en el código.
 
 ## Convenciones de Código
 
-- Python 3.11+
-- Type hints obligatorios
-- Docstrings en todas las funciones públicas
-- Async/await para operaciones I/O
-- structlog para logging
+- **Python**: 3.11+
+- **Type hints**: Obligatorios
+- **Docstrings**: En todas las funciones públicas
+- **Async/await**: Para todas las operaciones I/O
+- **Logging**: structlog (JSON structured logs)
+- **Formatter**: Black
+
+## Testing Local
+
+```bash
+# Instalar dependencias
+pip install -e .
+
+# Ejecutar tests
+pytest tests/
+
+# Ejecutar servidor local
+uvicorn src.app.main:app --reload --port 8000
+```
+
+Para testing de webhook local, usar ngrok:
+```bash
+ngrok http 8000
+# Configurar URL de ngrok en Meta Developer Console
+```
+
+## Workflow de Desarrollo
+
+1. **Editar código** → Test local
+2. **Commit** → Push a main
+3. **Railway** → Auto-deploy
+4. **Monitorear** → Logs via MCP
+5. **Verificar** → Enviar mensaje de prueba por WhatsApp
+
+## Notas Importantes
+
+- **SIEMPRE filtrar por tenant_id** en queries a DB
+- **NO exponer tokens** en logs (usar masking)
+- **Respuestas concisas** (WhatsApp tiene límite de 4096 chars)
+- **Timeout de 3 segundos** ideal para respuestas
+- **Background tasks** para procesamiento pesado (no bloquear webhook)

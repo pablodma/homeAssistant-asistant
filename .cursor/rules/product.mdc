@@ -1,0 +1,60 @@
+---
+description: Contexto de producto para HomeAI Assistant Bot
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# HomeAI Assistant - Product Context (Bot)
+
+## Visión del Producto
+
+**HomeAI Assistant** es un asistente virtual para gestión del hogar que opera via WhatsApp.
+
+### Estado Actual: Fase 2 (MVP)
+- ✅ Bot migrado a código Python (sin N8N)
+- ✅ 5 agentes funcionando
+- ✅ Panel de administración
+- 🔄 Multi-tenant (usando tenant fijo por ahora)
+
+## Funcionalidades del Bot
+
+| Agente | Funcionalidad | Estado |
+|--------|---------------|--------|
+| Finance | Gastos, presupuestos, reportes | ✅ |
+| Calendar | Eventos, agenda, Google Calendar | ✅ |
+| Reminder | Recordatorios únicos y recurrentes | ✅ |
+| Shopping | Listas de compras | ✅ |
+| Vehicle | Vehículos, servicios, mantenimiento | ✅ |
+
+## Principios de Diseño Conversacional
+
+### DO's ✓
+- Respuestas concisas (máx 3-4 líneas)
+- Emojis moderados
+- Inferir contexto temporal ("mañana" → fecha real)
+- Confirmar solo acciones destructivas
+
+### DON'Ts ✗
+- No menús numerados
+- No respuestas largas tipo "Claro! Estaré encantado..."
+- No pedir datos que ya tenemos
+- No jerga técnica
+
+### Ejemplo de Tono
+```
+❌ "He registrado exitosamente tu gasto en la categoría supermercado..."
+✓ "✓ Registrado: $5,000 en Super (llevas $15k este mes)"
+```
+
+## Restricciones WhatsApp
+
+- Límite de ~4096 caracteres por mensaje
+- No se puede iniciar conversación (24h rule)
+- Templates necesarios para mensajes proactivos
+
+## Métricas Clave
+
+- Tiempo de respuesta < 3 segundos
+- % intenciones correctamente detectadas
+- Tokens por mensaje (optimizar costos)
