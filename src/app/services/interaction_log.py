@@ -25,7 +25,7 @@ class InteractionLogger:
         tokens_out: Optional[int] = None,
         response_time_ms: Optional[int] = None,
         metadata: Optional[dict[str, Any]] = None,
-    ) -> None:
+    ) -> Optional[str]:
         """Log an interaction to the database.
 
         Args:
@@ -40,6 +40,9 @@ class InteractionLogger:
             tokens_out: Output tokens used.
             response_time_ms: Response time in milliseconds.
             metadata: Additional metadata.
+
+        Returns:
+            The interaction ID if successful, None otherwise.
         """
         try:
             pool = await get_pool()
@@ -58,12 +61,13 @@ class InteractionLogger:
                     response_time_ms,
                     metadata
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                RETURNING id
             """
 
             import json
             metadata_json = json.dumps(metadata) if metadata else None
 
-            await pool.execute(
+            result = await pool.fetchval(
                 query,
                 tenant_id,
                 user_phone,
@@ -80,10 +84,13 @@ class InteractionLogger:
 
             logger.debug(
                 "Interaction logged",
+                interaction_id=str(result),
                 tenant_id=tenant_id,
                 user_phone=user_phone,
                 agent_used=agent_used,
             )
+
+            return str(result) if result else None
 
         except Exception as e:
             # Don't fail the main flow if logging fails
@@ -93,3 +100,4 @@ class InteractionLogger:
                 tenant_id=tenant_id,
                 user_phone=user_phone,
             )
+            return None

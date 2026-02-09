@@ -113,6 +113,18 @@ homeai-assis/
 - **Método**: Keyword detection + LLM fallback (gpt-4.1-mini con tool calling)
 - **Prompt**: Editable desde base de datos (`agent_prompts` table)
 
+### QA Agent (Control de Calidad)
+- **Función**: Analiza cada interacción para detectar problemas de calidad
+- **Método**: LLM (gpt-4o-mini) analiza mensaje_in + mensaje_out + tool_result
+- **Ejecución**: Asíncrona (no agrega latencia a la respuesta del usuario)
+- **Ubicación**: `src/app/agents/qa.py`
+
+**Tipos de errores detectados:**
+- `misinterpretation`: Bot malinterpretó el mensaje del usuario
+- `hallucination`: Bot confirmó algo que no hizo
+- `unsupported_case`: Usuario pidió algo no soportado
+- `incomplete_response`: Respuesta falta información
+
 ### Sub-Agentes
 
 | Agente | Keywords | Backend/DB | Funcionalidad |
@@ -179,6 +191,46 @@ Cada interacción se guarda en `agent_interactions`:
 | `tokens_in/out` | Tokens consumidos |
 | `response_time_ms` | Tiempo de respuesta |
 | `metadata` | JSON con detalles adicionales |
+
+## Quality Logger
+
+Errores técnicos y de calidad se guardan en `quality_issues`:
+
+**Ubicación**: `src/app/services/quality_logger.py`
+
+**Tipos de error:**
+- **hard_error**: Errores técnicos (API, LLM, timeout, database)
+- **soft_error**: Errores de calidad detectados por QA Agent
+
+**Uso:**
+```python
+from ..services.quality_logger import get_quality_logger
+
+quality_logger = get_quality_logger()
+
+# Error duro (técnico)
+await quality_logger.log_hard_error(
+    tenant_id=tenant_id,
+    category="api_error",
+    error_message="Backend returned 500",
+    agent_name="finance",
+    tool_name="registrar_gasto",
+    severity="high",
+    exception=e,
+)
+
+# Error blando (QA)
+await quality_logger.log_soft_error(
+    tenant_id=tenant_id,
+    interaction_id=interaction_id,
+    category="hallucination",
+    qa_analysis="El bot confirmó el gasto pero la API falló",
+    qa_suggestion="Verificar resultado de herramienta antes de confirmar",
+    qa_confidence=0.92,
+)
+```
+
+**Panel de visualización:** homeai-admin → /quality
 
 ## Variables de Entorno
 

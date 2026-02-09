@@ -9,6 +9,7 @@ import structlog
 from openai import AsyncOpenAI
 
 from ..config import get_settings
+from ..services.quality_logger import get_quality_logger
 from .base import AgentResult, BaseAgent
 
 logger = structlog.get_logger()
@@ -44,6 +45,7 @@ class FinanceAgent(BaseAgent):
             The agent's response.
         """
         logger.info("Finance agent processing", message=message[:50])
+        quality_logger = get_quality_logger()
 
         prompt = await self.get_prompt(tenant_id)
 
@@ -207,8 +209,12 @@ class FinanceAgent(BaseAgent):
 
                 logger.info(f"Finance tool call: {tool_name}", args=tool_args)
 
-                # Execute the tool
-                tool_result = await self._execute_tool(tool_name, tool_args, tenant_id)
+                # Execute the tool (pass phone and message for error logging)
+                tool_result = await self._execute_tool(
+                    tool_name, tool_args, tenant_id,
+                    user_phone=phone,
+                    message_in=message,
+                )
 
                 # Generate response based on tool result
                 response_text = await self._generate_response(
@@ -233,6 +239,17 @@ class FinanceAgent(BaseAgent):
 
         except Exception as e:
             logger.error("Finance agent error", error=str(e))
+            # Log LLM error
+            await quality_logger.log_hard_error(
+                tenant_id=tenant_id,
+                category="llm_error",
+                error_message=str(e),
+                agent_name=self.name,
+                user_phone=phone,
+                message_in=message,
+                severity="high",
+                exception=e,
+            )
             return AgentResult(
                 response="Hubo un problema procesando tu solicitud de finanzas.",
                 agent_used=self.name,
@@ -243,6 +260,8 @@ class FinanceAgent(BaseAgent):
         tool_name: str,
         args: dict[str, Any],
         tenant_id: str,
+        user_phone: Optional[str] = None,
+        message_in: Optional[str] = None,
     ) -> dict[str, Any]:
         """Execute a finance tool by calling the backend API.
 
@@ -250,12 +269,15 @@ class FinanceAgent(BaseAgent):
             tool_name: Name of the tool.
             args: Tool arguments.
             tenant_id: The tenant ID.
+            user_phone: User's phone for error logging.
+            message_in: Original message for error logging.
 
         Returns:
             Tool execution result.
         """
         base_url = f"{self.settings.backend_api_url}/api/v1/tenants/{tenant_id}"
         headers = {"Authorization": f"Bearer {self.settings.backend_api_key}"}
+        quality_logger = get_quality_logger()
 
         async with httpx.AsyncClient() as client:
             try:
@@ -314,14 +336,54 @@ class FinanceAgent(BaseAgent):
                 if response.status_code == 200:
                     return {"success": True, "data": response.json()}
                 else:
+                    # Log API error as hard error
+                    error_text = response.text[:500] if response.text else "No response body"
+                    await quality_logger.log_hard_error(
+                        tenant_id=tenant_id,
+                        category="api_error",
+                        error_message=f"Backend API returned {response.status_code}: {error_text}",
+                        error_code=str(response.status_code),
+                        agent_name=self.name,
+                        tool_name=tool_name,
+                        user_phone=user_phone,
+                        message_in=message_in,
+                        severity="high" if response.status_code >= 500 else "medium",
+                        request_payload={"tool_args": args},
+                    )
                     return {
                         "success": False,
-                        "error": response.text,
+                        "error": error_text,
                         "status_code": response.status_code,
                     }
 
+            except httpx.TimeoutException as e:
+                logger.error(f"Tool execution timeout: {tool_name}", error=str(e))
+                await quality_logger.log_hard_error(
+                    tenant_id=tenant_id,
+                    category="timeout",
+                    error_message=f"Backend API timeout for {tool_name}",
+                    agent_name=self.name,
+                    tool_name=tool_name,
+                    user_phone=user_phone,
+                    message_in=message_in,
+                    severity="high",
+                    exception=e,
+                )
+                return {"success": False, "error": "Timeout al conectar con el servidor"}
+
             except Exception as e:
                 logger.error(f"Tool execution failed: {tool_name}", error=str(e))
+                await quality_logger.log_hard_error(
+                    tenant_id=tenant_id,
+                    category="api_error",
+                    error_message=str(e),
+                    agent_name=self.name,
+                    tool_name=tool_name,
+                    user_phone=user_phone,
+                    message_in=message_in,
+                    severity="high",
+                    exception=e,
+                )
                 return {"success": False, "error": str(e)}
 
     async def _generate_response(
@@ -351,17 +413,36 @@ class FinanceAgent(BaseAgent):
         if tool_name == "registrar_gasto":
             amount = args.get("amount", 0)
             category = args.get("category", "")
-            alert = data.get("alert", "")
+            alert = data.get("alert")
+            budget_status = data.get("budget_status")
+            
             response = f"✅ Registré un gasto de ${amount:,.0f} en {category}."
-            if alert:
+            
+            # Add budget status if available
+            if budget_status:
+                # Convert from string (JSON serialized Decimal) to float
+                remaining = float(budget_status.get("remaining", 0))
+                spent = float(budget_status.get("spent_this_month", 0))
+                limit = float(budget_status.get("monthly_limit", 0))
+                pct = float(budget_status.get("percentage_used", 0))
+                
+                if pct >= 100:
+                    response += f"\n\n🔴 Presupuesto EXCEDIDO en {category}."
+                    response += f"\n   Límite: ${limit:,.0f} | Gastado: ${spent:,.0f}"
+                elif pct >= 80:
+                    response += f"\n\n⚠️ Te quedan ${remaining:,.0f} de ${limit:,.0f} en {category} ({pct:.0f}%)"
+                else:
+                    response += f"\n\n💰 Te quedan ${remaining:,.0f} de ${limit:,.0f} en {category} ({pct:.0f}%)"
+            elif alert:
                 response += f"\n\n⚠️ {alert}"
+            
             return response
 
         elif tool_name == "consultar_reporte":
             if not data:
                 return "📊 No hay gastos registrados en este período."
 
-            total = data.get("total", 0)
+            total = float(data.get("total_spent", 0) or 0)
             by_category = data.get("by_category", [])
             period = args.get("period", "month")
 
@@ -374,9 +455,9 @@ class FinanceAgent(BaseAgent):
 
             response = f"📊 Resumen de gastos {period_names.get(period, period)}:\n\n"
             for cat in by_category[:5]:
-                name = cat.get("category", "")
-                amount = cat.get("total", 0)
-                pct = (amount / total * 100) if total > 0 else 0
+                name = cat.get("category_name", "")
+                amount = float(cat.get("total", 0) or 0)
+                pct = float(cat.get("percentage", 0) or 0)
                 response += f"• {name}: ${amount:,.0f} ({pct:.0f}%)\n"
 
             response += f"\n💰 Total: ${total:,.0f}"
@@ -390,10 +471,10 @@ class FinanceAgent(BaseAgent):
             response = "📋 Estado de tus presupuestos:\n\n"
             for b in budgets:
                 name = b.get("category", "")
-                limit = b.get("limit", 0)
-                spent = b.get("spent", 0)
-                remaining = b.get("remaining", 0)
-                pct = b.get("percentage", 0)
+                limit = float(b.get("limit", 0) or 0)
+                spent = float(b.get("spent", 0) or 0)
+                remaining = float(b.get("remaining", 0) or 0)
+                pct = float(b.get("percentage", 0) or 0)
 
                 status = "✓" if pct < 80 else "⚠️" if pct < 100 else "🔴"
                 response += f"• {name}: ${limit:,.0f}/mes\n"
@@ -404,7 +485,7 @@ class FinanceAgent(BaseAgent):
         elif tool_name == "eliminar_gasto":
             deleted = data.get("deleted", False)
             if deleted:
-                amount = data.get("amount", 0)
+                amount = float(data.get("amount", 0) or 0)
                 category = data.get("category", "")
                 return f"🗑️ Gasto eliminado: ${amount:,.0f} en {category}"
             else:
@@ -433,7 +514,7 @@ class FinanceAgent(BaseAgent):
                 return message
             budget = data.get("budget", {})
             category = budget.get("category", "")
-            limit = budget.get("monthly_limit", 0)
+            limit = float(budget.get("monthly_limit", 0) or 0)
             created = data.get("created", False)
             action = "creado" if created else "actualizado"
             return f"💰 Presupuesto {action}: {category} con ${limit:,.0f}/mes"
