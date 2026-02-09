@@ -68,9 +68,22 @@ class PhoneResolver:
         """
         url = f"{self._settings.backend_api_url}/api/v1/phone/lookup"
         
+        logger.debug(
+            "phone_lookup_starting",
+            phone=phone,
+            url=url,
+            backend_url=self._settings.backend_api_url,
+        )
+        
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(url, params={"phone": phone})
+                
+                logger.debug(
+                    "phone_lookup_response",
+                    phone=phone,
+                    status_code=response.status_code,
+                )
                 
                 if response.status_code != 200:
                     logger.warning(
@@ -104,6 +117,17 @@ class PhoneResolver:
                 "phone_lookup_error",
                 phone=phone,
                 error=str(e),
+                error_type=type(e).__name__,
+                url=url,
+            )
+            return None
+        except Exception as e:
+            logger.error(
+                "phone_lookup_unexpected_error",
+                phone=phone,
+                error=str(e),
+                error_type=type(e).__name__,
+                url=url,
             )
             return None
     

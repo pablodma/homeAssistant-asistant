@@ -122,7 +122,7 @@ async def process_message(message: IncomingMessage) -> None:
             await whatsapp.send_text(
                 message.phone,
                 "¡Hola! 👋 Para usar HomeAI necesitás registrar tu número primero.\n\n"
-                "Visitá https://homeai.app para crear tu cuenta y vincular tu WhatsApp.",
+                "Visitá https://home-assistant-frontend-brown.vercel.app para crear tu cuenta y vincular tu WhatsApp.",
             )
             return
 
