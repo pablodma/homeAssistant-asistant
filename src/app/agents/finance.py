@@ -163,6 +163,26 @@ class FinanceAgent(BaseAgent):
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "fijar_presupuesto",
+                    "description": "Fija o actualiza el presupuesto mensual de una categoría",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "category": {"type": "string", "description": "Nombre de la categoría"},
+                            "monthly_limit": {"type": "number", "description": "Límite mensual en pesos"},
+                            "alert_threshold": {
+                                "type": "integer",
+                                "description": "Porcentaje de alerta (default: 80)",
+                                "default": 80,
+                            },
+                        },
+                        "required": ["category", "monthly_limit"],
+                    },
+                },
+            },
         ]
 
         try:
@@ -277,6 +297,13 @@ class FinanceAgent(BaseAgent):
                 elif tool_name == "modificar_gasto":
                     response = await client.patch(
                         f"{base_url}/agent/expense",
+                        params=args,
+                        headers=headers,
+                        timeout=30.0,
+                    )
+                elif tool_name == "fijar_presupuesto":
+                    response = await client.put(
+                        f"{base_url}/agent/budget",
                         params=args,
                         headers=headers,
                         timeout=30.0,
@@ -399,5 +426,16 @@ class FinanceAgent(BaseAgent):
                 return response.strip()
             else:
                 return "❌ No encontré el gasto para modificar."
+
+        elif tool_name == "fijar_presupuesto":
+            message = data.get("message", "")
+            if message:
+                return message
+            budget = data.get("budget", {})
+            category = budget.get("category", "")
+            limit = budget.get("monthly_limit", 0)
+            created = data.get("created", False)
+            action = "creado" if created else "actualizado"
+            return f"💰 Presupuesto {action}: {category} con ${limit:,.0f}/mes"
 
         return "✓ Operación completada."
