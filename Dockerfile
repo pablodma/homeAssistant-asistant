@@ -16,6 +16,9 @@ RUN pip install --no-cache-dir -e .
 # Copy application code
 COPY src/ src/
 
+# Copy prompt configuration files
+COPY docs/prompts/ docs/prompts/
+
 # Expose port (Railway sets PORT env var)
 EXPOSE ${PORT:-8000}
 

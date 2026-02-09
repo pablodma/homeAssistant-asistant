@@ -55,14 +55,39 @@ Usuario (WhatsApp)
 
 ## Agentes
 
-| Agente | Descripción |
-|--------|-------------|
-| Router | Orquestador principal, decide qué sub-agente usar |
-| Finance | Gestión de gastos y presupuestos |
-| Calendar | Eventos y sincronización con Google Calendar |
-| Reminder | Recordatorios y alertas |
-| Shopping | Listas de compras |
-| Vehicle | Gestión de vehículos y mantenimiento |
+| Agente | Descripción | Prompt |
+|--------|-------------|--------|
+| Router | Orquestador principal, decide qué sub-agente usar | `docs/prompts/router-agent.md` |
+| Finance | Gestión de gastos y presupuestos | `docs/prompts/finance-agent.md` |
+| Calendar | Eventos y sincronización con Google Calendar | `docs/prompts/calendar-agent.md` |
+| Reminder | Recordatorios y alertas | `docs/prompts/reminder-agent.md` |
+| Shopping | Listas de compras | `docs/prompts/shopping-agent.md` |
+| Vehicle | Gestión de vehículos y mantenimiento | `docs/prompts/vehicle-agent.md` |
+
+## Prompts de Agentes
+
+Los prompts de los agentes están en `docs/prompts/` como archivos markdown.
+
+### Arquitectura Prompt-First
+
+La lógica de decisión de los agentes vive en los prompts, NO en código Python:
+
+```
+docs/prompts/
+├── router-agent.md     # Cómo decide qué sub-agente usar
+├── finance-agent.md    # Reglas para registrar gastos, presupuestos
+├── calendar-agent.md   # Manejo de eventos y agenda
+├── reminder-agent.md   # Recordatorios y alertas
+├── shopping-agent.md   # Listas de compras
+├── vehicle-agent.md    # Gestión de vehículos
+└── qa-agent.md         # Control de calidad
+```
+
+### Modificar comportamiento de un agente
+
+1. Editar `docs/prompts/{agent}-agent.md`
+2. Commit + push
+3. Railway redeploya automáticamente (~30 segundos)
 
 ## Desarrollo Local
 

@@ -3,6 +3,7 @@ description: Arquitectura y principios de diseño para agentes LLM
 globs:
   - "**/agents/**"
   - "**/services/prompt_loader.py"
+  - "**/docs/prompts/**"
 alwaysApply: true
 ---
 
@@ -14,7 +15,7 @@ alwaysApply: true
 
 ### ✅ Correcto (Prompt-driven)
 ```markdown
-# En el prompt del agente:
+# En el prompt del agente (docs/prompts/finance-agent.md):
 "ANTES de registrar un gasto, verificá que la categoría exista 
 usando consultar_presupuesto. Si no existe, preguntá al usuario 
 a cuál categoría quiere asignarlo."
@@ -33,13 +34,43 @@ El código está tomando decisiones que debería tomar el LLM.
 
 ---
 
-## Regla #2: Responsabilidades del Código vs Prompt
+## Regla #2: Prompts en Archivos de Configuración
+
+**Los prompts viven en `docs/prompts/` como archivos markdown.**
+
+```
+docs/prompts/
+├── finance-agent.md    # Prompt del agente de finanzas
+├── calendar-agent.md   # Prompt del agente de calendario
+├── router-agent.md     # Prompt del orquestador
+├── qa-agent.md         # Prompt del agente de QA
+└── ...
+```
+
+### Ventajas:
+- ✅ Versionado en git (historial completo)
+- ✅ Code review de cambios al prompt
+- ✅ Una sola fuente de verdad
+- ✅ Railway redeploya automáticamente al pushear
+
+### Para cambiar un prompt:
+1. Editar `docs/prompts/{agent}-agent.md`
+2. Commit + push
+3. Railway redeploya (~30 segundos)
+
+### NO usar base de datos para prompts:
+- Añade complejidad innecesaria
+- Múltiples fuentes de verdad
+- Difícil de versionar y revisar cambios
+
+---
+
+## Regla #3: Responsabilidades del Código vs Prompt
 
 ### El CÓDIGO debe:
 - Ejecutar llamadas HTTP a APIs/backend
 - Formatear respuestas para WhatsApp (sin markdown complejo)
 - Manejar errores técnicos (timeouts, 500s)
-- Persistir estado si es necesario (DB)
 - Logging y métricas
 
 ### El PROMPT debe:
@@ -48,29 +79,6 @@ El código está tomando decisiones que debería tomar el LLM.
 - Definir validaciones de negocio (ej: "no crear categorías nuevas")
 - Definir el tono y formato de respuestas
 - Definir cómo manejar casos ambiguos
-
----
-
-## Regla #3: Prompts Completos y Documentados
-
-### Ubicación de prompts
-```
-docs/prompts/
-├── finance-agent.md      # Prompt completo documentado
-├── calendar-agent.md
-├── reminder-agent.md
-└── ...
-```
-
-### Sincronización obligatoria
-1. Los prompts en `docs/prompts/` son la fuente de verdad
-2. Deben cargarse desde DB (`agent_prompts` table) para permitir edición en runtime
-3. Si no hay prompt en DB, el fallback debe cargar desde `docs/prompts/`, NO usar strings hardcodeados
-
-### Antes de modificar comportamiento de un agente:
-1. ¿Se puede resolver actualizando el prompt? → Hacerlo en `docs/prompts/`
-2. ¿Requiere nueva herramienta? → Agregar tool + documentar en prompt
-3. ¿Requiere código nuevo? → Solo si es infraestructura (no lógica de decisión)
 
 ---
 
@@ -86,7 +94,6 @@ Las tools son **capacidades**, no **lógica**.
     "parameters": {
         "amount": {"type": "number"},
         "category": {"type": "string"},
-        ...
     }
 }
 ```
@@ -105,23 +112,14 @@ El prompt debe instruir: "Si la categoría no existe, preguntá al usuario".
 
 ## Regla #5: Flujos Multi-turno
 
-Para conversaciones que requieren múltiples intercambios:
+Para conversaciones que requieren múltiples intercambios, **usar el prompt**:
 
-### Opción A: Prompt-driven (Preferida)
-El prompt instruye al agente a preguntar y esperar respuesta:
 ```markdown
 "Si falta información, preguntá y esperá la respuesta del usuario 
 antes de ejecutar la herramienta."
 ```
 
-### Opción B: Estado explícito (Solo si necesario)
-Si WhatsApp requiere UI especial (botones, listas):
-1. El agente retorna metadata indicando qué UI mostrar
-2. El webhook envía el mensaje interactivo
-3. El usuario responde
-4. Se continúa el flujo
-
-**Pero la DECISIÓN de cuándo mostrar la UI sigue siendo del prompt.**
+El historial de conversación permite al LLM continuar flujos multi-turno naturalmente.
 
 ---
 
@@ -148,51 +146,39 @@ estas categorías querés asignarlo?' y listá las existentes."
 ### Checklist obligatorio:
 - [ ] ¿Puedo lograr esto con cambios al prompt únicamente?
 - [ ] ¿Estoy poniendo lógica de decisión en Python?
-- [ ] ¿El prompt documentado (`docs/prompts/`) refleja este comportamiento?
 - [ ] ¿Estoy creando código que el LLM podría manejar naturalmente?
 
 ### Si respondés "sí" a cualquier pregunta → Revisá el approach.
 
 ---
 
-## Ejemplo: Validación de Categorías
+## Estructura de un Prompt de Agente
 
-### ❌ Lo que hicimos mal:
-```python
-# finance.py - 200 líneas de código para validar categorías
-async def _execute_tool(self, ...):
-    categories = await self._get_categories(tenant_id)
-    matched = self._match_category(user_category, categories)
-    if not matched:
-        return {"needs_category_selection": True, ...}
-```
+Cada archivo en `docs/prompts/` debe tener:
 
-### ✅ Lo que debíamos hacer:
 ```markdown
-# En docs/prompts/finance-agent.md
+# Prompt: {Nombre} Agent
 
-## Reglas para Registrar Gastos
+## Identidad
+Quién es el agente, qué hace.
 
-1. ANTES de registrar un gasto, llamá a `consultar_presupuesto` 
-   para obtener las categorías existentes.
+## Herramientas Disponibles
+Lista de tools con descripción de cuándo usar cada una.
 
-2. Si la categoría que menciona el usuario NO coincide exactamente 
-   con ninguna existente:
-   - NO registres el gasto
-   - NO crees la categoría automáticamente
-   - Preguntá: "No encontré la categoría [X]. Tus categorías son: 
-     [lista]. ¿A cuál querés asignar el gasto?"
+## Reglas de Comportamiento
+Validaciones, flujos, restricciones.
 
-3. Cuando el usuario responda con la categoría correcta, 
-   ENTONCES registrá el gasto.
+## Tono y Estilo
+Cómo debe comunicarse.
+
+## Ejemplos
+Casos de uso con el comportamiento esperado.
 ```
-
-El LLM, con GPT-4, es suficientemente inteligente para seguir estas instrucciones.
 
 ---
 
 ## Referencias
 
-- Prompts documentados: `docs/prompts/`
-- Tabla de prompts en DB: `agent_prompts`
+- Archivos de prompts: `docs/prompts/`
 - Loader de prompts: `src/app/services/prompt_loader.py`
+- Agentes: `src/app/agents/`

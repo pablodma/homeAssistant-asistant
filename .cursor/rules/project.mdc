@@ -77,6 +77,12 @@ Repositorios GitHub:
 
 ```
 homeai-assis/
+├── docs/prompts/                 # ⭐ PROMPTS DE AGENTES (archivos de config)
+│   ├── finance-agent.md          # Prompt del agente de finanzas
+│   ├── calendar-agent.md         # Prompt del agente de calendario
+│   ├── router-agent.md           # Prompt del orquestador
+│   ├── qa-agent.md               # Prompt del agente de QA
+│   └── ...
 ├── src/app/
 │   ├── main.py                   # FastAPI entry point
 │   ├── config/
@@ -96,7 +102,7 @@ homeai-assis/
 │   │   └── vehicle.py            # VehicleAgent
 │   ├── services/
 │   │   ├── conversation.py       # Manejo de memoria de chat
-│   │   ├── prompt_loader.py      # Carga prompts desde DB
+│   │   ├── prompt_loader.py      # Carga prompts desde archivos
 │   │   └── interaction_log.py    # Logging de interacciones
 │   └── repositories/
 │       └── memory.py             # CRUD para chat memory
@@ -111,13 +117,13 @@ homeai-assis/
 ### Router Agent (Orquestador)
 - **Función**: Decide qué sub-agente debe manejar cada mensaje
 - **Método**: Keyword detection + LLM fallback (gpt-4.1-mini con tool calling)
-- **Prompt**: Editable desde base de datos (`agent_prompts` table)
+- **Prompt**: `docs/prompts/router-agent.md`
 
 ### QA Agent (Control de Calidad)
 - **Función**: Analiza cada interacción para detectar problemas de calidad
 - **Método**: LLM (gpt-4o-mini) analiza mensaje_in + mensaje_out + tool_result
 - **Ejecución**: Asíncrona (no agrega latencia a la respuesta del usuario)
-- **Ubicación**: `src/app/agents/qa.py`
+- **Prompt**: `docs/prompts/qa-agent.md`
 
 **Tipos de errores detectados:**
 - `misinterpretation`: Bot malinterpretó el mensaje del usuario
@@ -127,13 +133,13 @@ homeai-assis/
 
 ### Sub-Agentes
 
-| Agente | Keywords | Backend/DB | Funcionalidad |
-|--------|----------|------------|---------------|
-| **Finance** | `gast`, `compra`, `pagu`, `presupuesto` | Backend API | Gastos, reportes, presupuestos |
-| **Calendar** | `agenda`, `evento`, `reunión`, `cita`, `turno` | Backend API | Eventos, agenda |
-| **Reminder** | `recorda`, `avisa`, `alerta` | PostgreSQL directo | Recordatorios |
-| **Shopping** | `lista`, `super`, `compras`, `agreg`, `falta` | PostgreSQL directo | Listas de compras |
-| **Vehicle** | `auto`, `coche`, `service`, `nafta`, `combustible` | PostgreSQL directo | Vehículos, mantenimiento |
+| Agente | Keywords | Backend/DB | Prompt |
+|--------|----------|------------|--------|
+| **Finance** | `gast`, `compra`, `pagu`, `presupuesto` | Backend API | `docs/prompts/finance-agent.md` |
+| **Calendar** | `agenda`, `evento`, `reunión`, `cita`, `turno` | Backend API | `docs/prompts/calendar-agent.md` |
+| **Reminder** | `recorda`, `avisa`, `alerta` | PostgreSQL directo | `docs/prompts/reminder-agent.md` |
+| **Shopping** | `lista`, `super`, `compras`, `agreg`, `falta` | PostgreSQL directo | `docs/prompts/shopping-agent.md` |
+| **Vehicle** | `auto`, `coche`, `service`, `nafta`, `combustible` | PostgreSQL directo | `docs/prompts/vehicle-agent.md` |
 
 ## Comunicación con Backend
 
@@ -298,18 +304,27 @@ Railway_HomeAs-list-variables(
 )
 ```
 
-## Prompts Editables
+## Prompts de Agentes
 
-Los prompts se cargan desde la tabla `agent_prompts`:
+Los prompts viven en archivos de configuración (NO en base de datos):
 
-```sql
-SELECT prompt_content 
-FROM agent_prompts 
-WHERE tenant_id = $1 AND agent_name = $2 AND is_active = true
-ORDER BY version DESC LIMIT 1;
+```
+docs/prompts/
+├── finance-agent.md    # Agente de finanzas
+├── calendar-agent.md   # Agente de calendario  
+├── router-agent.md     # Orquestador principal
+├── qa-agent.md         # Control de calidad
+└── ...
 ```
 
-Si no hay prompt en DB, usa el default hardcodeado en el código.
+### Para cambiar un prompt:
+1. Editar `docs/prompts/{agent}-agent.md`
+2. Commit + push
+3. Railway redeploya automáticamente (~30 seg)
+
+### Arquitectura prompt-first:
+- La lógica de decisión va en el prompt, NO en código Python
+- Ver reglas detalladas en `.cursor/rules/agents-architecture.mdc`
 
 ## Convenciones de Código
 
