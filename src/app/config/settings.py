@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     # App
     app_name: str = "HomeAI Assistant"
     app_env: Literal["development", "production"] = "development"
+    
+    # DEPRECATED: default_tenant_id is no longer used for processing messages.
+    # Tenant is now resolved dynamically from phone number.
+    # This is kept for backward compatibility with existing configuration.
     default_tenant_id: str = "00000000-0000-0000-0000-000000000001"
 
     # WhatsApp Business API

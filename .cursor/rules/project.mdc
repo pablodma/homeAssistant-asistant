@@ -62,12 +62,14 @@ Estructura local:
 d:\Proyectos\homeAsiss\           ← Carpeta contenedora (NO es repo)
 ├── homeai-api/                   ← Backend FastAPI → Railway
 ├── homeai-web/                   ← Frontend Next.js → Vercel
+├── homeai-admin/                 ← Panel Admin Next.js → Vercel
 ├── homeai-assis/                 ← ESTE PROYECTO (Bot → Railway)
 └── .credentials/                 ← Credenciales locales
 
 Repositorios GitHub:
 ├── homeAssistant-backend         
 ├── homeAssistant-frontend        
+├── homeAssistant-admin           ← Panel de administración
 └── homeAssistant-asistant        ← ESTE REPO
 ```
 

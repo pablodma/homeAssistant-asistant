@@ -10,6 +10,7 @@ from ..config import get_settings
 from ..agents.router import RouterAgent
 from ..services.conversation import ConversationService
 from ..services.interaction_log import InteractionLogger
+from ..services.phone_resolver import get_phone_resolver
 from .client import get_whatsapp_client
 from .types import IncomingMessage, WhatsAppWebhookPayload
 
@@ -99,6 +100,7 @@ async def process_message(message: IncomingMessage) -> None:
 
     start_time = time.time()
     settings = get_settings()
+    whatsapp = get_whatsapp_client()
 
     logger.info(
         "Processing message",
@@ -107,24 +109,47 @@ async def process_message(message: IncomingMessage) -> None:
     )
 
     try:
-        # Initialize services
-        whatsapp = get_whatsapp_client()
-        conversation_service = ConversationService()
-        interaction_logger = InteractionLogger()
-
         # Mark message as read
         await whatsapp.mark_as_read(message.message_id)
+
+        # Resolve tenant by phone number
+        phone_resolver = get_phone_resolver()
+        phone_info = await phone_resolver.resolve(message.phone)
+
+        if not phone_info:
+            # Phone not registered - send registration message
+            logger.info("unregistered_phone", phone=message.phone)
+            await whatsapp.send_text(
+                message.phone,
+                "¡Hola! 👋 Para usar HomeAI necesitás registrar tu número primero.\n\n"
+                "Visitá https://homeai.app para crear tu cuenta y vincular tu WhatsApp.",
+            )
+            return
+
+        tenant_id = phone_info.tenant_id
+        user_name = phone_info.user_name or message.contact_name
+
+        logger.info(
+            "tenant_resolved",
+            phone=message.phone,
+            tenant_id=tenant_id,
+            home_name=phone_info.home_name,
+        )
+
+        # Initialize services
+        conversation_service = ConversationService()
+        interaction_logger = InteractionLogger()
 
         # Get or create conversation context
         conversation = await conversation_service.get_or_create(
             phone=message.phone,
-            tenant_id=settings.default_tenant_id,
+            tenant_id=tenant_id,
         )
 
         # Load conversation history
         history = await conversation_service.get_history(
             phone=message.phone,
-            tenant_id=settings.default_tenant_id,
+            tenant_id=tenant_id,
             limit=10,
         )
 
@@ -133,7 +158,7 @@ async def process_message(message: IncomingMessage) -> None:
         result = await router_agent.process(
             message=message.text,
             phone=message.phone,
-            tenant_id=settings.default_tenant_id,
+            tenant_id=tenant_id,
             history=history,
         )
 
@@ -143,13 +168,13 @@ async def process_message(message: IncomingMessage) -> None:
         # Save to conversation history
         await conversation_service.add_message(
             phone=message.phone,
-            tenant_id=settings.default_tenant_id,
+            tenant_id=tenant_id,
             role="user",
             content=message.text,
         )
         await conversation_service.add_message(
             phone=message.phone,
-            tenant_id=settings.default_tenant_id,
+            tenant_id=tenant_id,
             role="assistant",
             content=result.response,
         )
@@ -157,9 +182,9 @@ async def process_message(message: IncomingMessage) -> None:
         # Log interaction
         response_time_ms = int((time.time() - start_time) * 1000)
         await interaction_logger.log(
-            tenant_id=settings.default_tenant_id,
+            tenant_id=tenant_id,
             user_phone=message.phone,
-            user_name=message.contact_name,
+            user_name=user_name,
             message_in=message.text,
             message_out=result.response,
             agent_used=result.agent_used,
@@ -172,6 +197,7 @@ async def process_message(message: IncomingMessage) -> None:
         logger.info(
             "Message processed successfully",
             phone=message.phone,
+            tenant_id=tenant_id,
             agent_used=result.agent_used,
             response_time_ms=response_time_ms,
         )
@@ -185,7 +211,6 @@ async def process_message(message: IncomingMessage) -> None:
 
         # Send error message to user
         try:
-            whatsapp = get_whatsapp_client()
             await whatsapp.send_text(
                 message.phone,
                 "Hubo un problema procesando tu mensaje. Por favor, intentá de nuevo en unos segundos.",
