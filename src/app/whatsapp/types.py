@@ -14,10 +14,7 @@ class WhatsAppContact(BaseModel):
 
     @property
     def phone(self) -> str:
-        """Get phone number without country code prefix issues."""
-        # Remove 549 prefix if present (Argentina mobile)
-        if self.wa_id.startswith("549"):
-            return "54" + self.wa_id[3:]
+        """Get phone number in E.164 format."""
         return self.wa_id
 
 
@@ -97,10 +94,8 @@ class IncomingMessage(BaseModel):
         contact: Optional[WhatsAppContact] = None,
     ) -> "IncomingMessage":
         """Create from webhook data."""
+        # Use phone number as-is from WhatsApp (already in E.164 format without +)
         phone = message.from_
-        # Normalize phone (remove 549 prefix for Argentina)
-        if phone.startswith("549"):
-            phone = "54" + phone[3:]
 
         contact_name = None
         if contact and contact.profile:
