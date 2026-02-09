@@ -15,9 +15,9 @@ from ..config.database import get_pool
 
 logger = structlog.get_logger()
 
-# Path to documented prompts (relative to project root)
-# In production, this resolves to the docs/prompts folder in the repo
-PROMPTS_DIR = Path(__file__).parent.parent.parent.parent.parent / "docs" / "prompts"
+# Path to documented prompts (inside this repo)
+# homeai-assis/docs/prompts/ - available in production on Railway
+PROMPTS_DIR = Path(__file__).parent.parent.parent.parent / "docs" / "prompts"
 
 # Mapping of agent names to their prompt files
 PROMPT_FILES = {
