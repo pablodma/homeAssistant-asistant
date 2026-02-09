@@ -22,6 +22,31 @@ class WhatsAppClient:
         self.phone_number_id = self.settings.whatsapp_phone_number_id
         self.access_token = self.settings.whatsapp_access_token
 
+    def _normalize_phone_for_whatsapp(self, phone: str) -> str:
+        """
+        Normalize phone number for WhatsApp API.
+        
+        WhatsApp API (in test mode) doesn't accept Argentine numbers with the '9'
+        prefix for mobile numbers. This removes it for sending.
+        
+        Example: 5491161366496 -> 541161366496
+        """
+        # Remove + if present
+        phone = phone.lstrip("+")
+        
+        # Argentine mobile numbers: remove the 9 after country code
+        # Format: 549XXXXXXXXXX -> 54XXXXXXXXXX
+        if phone.startswith("549") and len(phone) == 13:
+            normalized = "54" + phone[3:]
+            logger.debug(
+                "phone_normalized_for_whatsapp",
+                original=phone,
+                normalized=normalized,
+            )
+            return normalized
+        
+        return phone
+
     async def send_message(self, message: OutgoingMessage) -> bool:
         """Send a text message to a WhatsApp number.
 
@@ -38,10 +63,13 @@ class WhatsAppClient:
             "Content-Type": "application/json",
         }
 
+        # Normalize phone for WhatsApp API (removes Argentine mobile '9' prefix)
+        normalized_phone = self._normalize_phone_for_whatsapp(message.phone)
+        
         payload = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
-            "to": message.phone,
+            "to": normalized_phone,
             "type": "text",
             "text": {"body": message.text},
         }
