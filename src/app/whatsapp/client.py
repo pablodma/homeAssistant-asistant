@@ -119,6 +119,100 @@ class WhatsAppClient:
         """
         return await self.send_message(OutgoingMessage(phone=phone, text=text))
 
+    async def send_interactive_list(
+        self,
+        phone: str,
+        header: str,
+        body: str,
+        button_text: str,
+        sections: list[dict],
+    ) -> bool:
+        """Send an interactive list message.
+
+        Args:
+            phone: Recipient phone number.
+            header: Header text (max 60 chars).
+            body: Body text (max 1024 chars).
+            button_text: Text on the button to open list (max 20 chars).
+            sections: List of sections, each with 'title' and 'rows'.
+                      Each row has 'id', 'title' (max 24 chars), and optional 'description'.
+
+        Returns:
+            True if sent successfully.
+
+        Example:
+            await send_interactive_list(
+                phone="5491161366496",
+                header="Seleccionar categoría",
+                body="¿A qué categoría querés asignar el gasto?",
+                button_text="Ver categorías",
+                sections=[{
+                    "title": "Categorías disponibles",
+                    "rows": [
+                        {"id": "cat_1", "title": "Supermercado", "description": "$50,000/mes"},
+                        {"id": "cat_2", "title": "Transporte", "description": "$30,000/mes"},
+                    ]
+                }]
+            )
+        """
+        url = f"{WHATSAPP_API_URL}/{self.phone_number_id}/messages"
+
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json",
+        }
+
+        normalized_phone = self._normalize_phone_for_whatsapp(phone)
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": normalized_phone,
+            "type": "interactive",
+            "interactive": {
+                "type": "list",
+                "header": {"type": "text", "text": header[:60]},
+                "body": {"text": body[:1024]},
+                "action": {
+                    "button": button_text[:20],
+                    "sections": sections,
+                },
+            },
+        }
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=30.0,
+                )
+
+                if response.status_code == 200:
+                    logger.info(
+                        "Interactive list sent successfully",
+                        phone=phone,
+                        message_id=response.json().get("messages", [{}])[0].get("id"),
+                    )
+                    return True
+                else:
+                    logger.error(
+                        "Failed to send interactive list",
+                        phone=phone,
+                        status_code=response.status_code,
+                        response=response.text,
+                    )
+                    return False
+
+        except Exception as e:
+            logger.error(
+                "Error sending interactive list",
+                phone=phone,
+                error=str(e),
+            )
+            return False
+
     async def mark_as_read(self, message_id: str) -> bool:
         """Mark a message as read.
 

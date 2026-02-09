@@ -1,0 +1,198 @@
+---
+description: Arquitectura y principios de diseño para agentes LLM
+globs:
+  - "**/agents/**"
+  - "**/services/prompt_loader.py"
+alwaysApply: true
+---
+
+# Arquitectura de Agentes LLM - Principios Fundamentales
+
+## Regla #1: PROMPT-FIRST (Obligatorio)
+
+**La lógica de decisión SIEMPRE va en el prompt, NO en código Python.**
+
+### ✅ Correcto (Prompt-driven)
+```markdown
+# En el prompt del agente:
+"ANTES de registrar un gasto, verificá que la categoría exista 
+usando consultar_presupuesto. Si no existe, preguntá al usuario 
+a cuál categoría quiere asignarlo."
+```
+
+El LLM decide cuándo preguntar basándose en las instrucciones del prompt.
+
+### ❌ Incorrecto (Code-driven)
+```python
+# En finance.py:
+if not self._match_category(user_category, categories):
+    return {"needs_category_selection": True, ...}
+```
+
+El código está tomando decisiones que debería tomar el LLM.
+
+---
+
+## Regla #2: Responsabilidades del Código vs Prompt
+
+### El CÓDIGO debe:
+- Ejecutar llamadas HTTP a APIs/backend
+- Formatear respuestas para WhatsApp (sin markdown complejo)
+- Manejar errores técnicos (timeouts, 500s)
+- Persistir estado si es necesario (DB)
+- Logging y métricas
+
+### El PROMPT debe:
+- Definir cuándo usar cada herramienta
+- Definir flujos de conversación (preguntar → esperar → actuar)
+- Definir validaciones de negocio (ej: "no crear categorías nuevas")
+- Definir el tono y formato de respuestas
+- Definir cómo manejar casos ambiguos
+
+---
+
+## Regla #3: Prompts Completos y Documentados
+
+### Ubicación de prompts
+```
+docs/prompts/
+├── finance-agent.md      # Prompt completo documentado
+├── calendar-agent.md
+├── reminder-agent.md
+└── ...
+```
+
+### Sincronización obligatoria
+1. Los prompts en `docs/prompts/` son la fuente de verdad
+2. Deben cargarse desde DB (`agent_prompts` table) para permitir edición en runtime
+3. Si no hay prompt en DB, el fallback debe cargar desde `docs/prompts/`, NO usar strings hardcodeados
+
+### Antes de modificar comportamiento de un agente:
+1. ¿Se puede resolver actualizando el prompt? → Hacerlo en `docs/prompts/`
+2. ¿Requiere nueva herramienta? → Agregar tool + documentar en prompt
+3. ¿Requiere código nuevo? → Solo si es infraestructura (no lógica de decisión)
+
+---
+
+## Regla #4: Herramientas (Tools) como Capacidades
+
+Las tools son **capacidades**, no **lógica**.
+
+### ✅ Tool bien diseñado
+```python
+{
+    "name": "registrar_gasto",
+    "description": "Registra un nuevo gasto",
+    "parameters": {
+        "amount": {"type": "number"},
+        "category": {"type": "string"},
+        ...
+    }
+}
+```
+La tool solo describe QUÉ puede hacer, no CUÁNDO usarla.
+
+### ❌ Tool con lógica embebida
+```python
+# NO hacer esto en _execute_tool():
+if not category_exists:
+    return {"needs_category_selection": True}  # ❌ Decisión en código
+```
+
+El prompt debe instruir: "Si la categoría no existe, preguntá al usuario".
+
+---
+
+## Regla #5: Flujos Multi-turno
+
+Para conversaciones que requieren múltiples intercambios:
+
+### Opción A: Prompt-driven (Preferida)
+El prompt instruye al agente a preguntar y esperar respuesta:
+```markdown
+"Si falta información, preguntá y esperá la respuesta del usuario 
+antes de ejecutar la herramienta."
+```
+
+### Opción B: Estado explícito (Solo si necesario)
+Si WhatsApp requiere UI especial (botones, listas):
+1. El agente retorna metadata indicando qué UI mostrar
+2. El webhook envía el mensaje interactivo
+3. El usuario responde
+4. Se continúa el flujo
+
+**Pero la DECISIÓN de cuándo mostrar la UI sigue siendo del prompt.**
+
+---
+
+## Regla #6: Validaciones de Negocio
+
+### ❌ Validación en código
+```python
+def _execute_tool(self, ...):
+    if category not in existing_categories:
+        return error  # El código decide
+```
+
+### ✅ Validación en prompt
+```markdown
+"NUNCA crees categorías nuevas automáticamente. Si el usuario 
+menciona una categoría que no existe, preguntá: '¿A cuál de 
+estas categorías querés asignarlo?' y listá las existentes."
+```
+
+---
+
+## Regla #7: Antes de Escribir Código para Agentes
+
+### Checklist obligatorio:
+- [ ] ¿Puedo lograr esto con cambios al prompt únicamente?
+- [ ] ¿Estoy poniendo lógica de decisión en Python?
+- [ ] ¿El prompt documentado (`docs/prompts/`) refleja este comportamiento?
+- [ ] ¿Estoy creando código que el LLM podría manejar naturalmente?
+
+### Si respondés "sí" a cualquier pregunta → Revisá el approach.
+
+---
+
+## Ejemplo: Validación de Categorías
+
+### ❌ Lo que hicimos mal:
+```python
+# finance.py - 200 líneas de código para validar categorías
+async def _execute_tool(self, ...):
+    categories = await self._get_categories(tenant_id)
+    matched = self._match_category(user_category, categories)
+    if not matched:
+        return {"needs_category_selection": True, ...}
+```
+
+### ✅ Lo que debíamos hacer:
+```markdown
+# En docs/prompts/finance-agent.md
+
+## Reglas para Registrar Gastos
+
+1. ANTES de registrar un gasto, llamá a `consultar_presupuesto` 
+   para obtener las categorías existentes.
+
+2. Si la categoría que menciona el usuario NO coincide exactamente 
+   con ninguna existente:
+   - NO registres el gasto
+   - NO crees la categoría automáticamente
+   - Preguntá: "No encontré la categoría [X]. Tus categorías son: 
+     [lista]. ¿A cuál querés asignar el gasto?"
+
+3. Cuando el usuario responda con la categoría correcta, 
+   ENTONCES registrá el gasto.
+```
+
+El LLM, con GPT-4, es suficientemente inteligente para seguir estas instrucciones.
+
+---
+
+## Referencias
+
+- Prompts documentados: `docs/prompts/`
+- Tabla de prompts en DB: `agent_prompts`
+- Loader de prompts: `src/app/services/prompt_loader.py`

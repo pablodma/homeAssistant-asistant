@@ -1,7 +1,10 @@
-"""Finance Agent - Expense and budget management."""
+"""Finance Agent - Expense and budget management.
+
+This agent uses a prompt-first approach: all decision logic is in the prompt,
+the code only executes tools and formats responses.
+"""
 
 import json
-from datetime import datetime, timedelta
 from typing import Any, Optional
 
 import httpx
@@ -16,7 +19,14 @@ logger = structlog.get_logger()
 
 
 class FinanceAgent(BaseAgent):
-    """Agent for managing expenses and budgets."""
+    """Agent for managing expenses and budgets.
+    
+    Decision logic is handled by the LLM through the prompt.
+    This code only:
+    - Executes HTTP calls to backend APIs
+    - Formats responses for WhatsApp
+    - Handles technical errors
+    """
 
     name = "finance"
 
@@ -60,18 +70,18 @@ class FinanceAgent(BaseAgent):
 
         messages.append({"role": "user", "content": message})
 
-        # Define tools
+        # Define tools - these are CAPABILITIES, the prompt decides WHEN to use them
         tools = [
             {
                 "type": "function",
                 "function": {
                     "name": "registrar_gasto",
-                    "description": "Registra un nuevo gasto",
+                    "description": "Registra un nuevo gasto. La categoría debe existir.",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "amount": {"type": "number", "description": "Monto del gasto"},
-                            "category": {"type": "string", "description": "Categoría del gasto"},
+                            "category": {"type": "string", "description": "Categoría del gasto (debe existir)"},
                             "description": {"type": "string", "description": "Descripción opcional"},
                             "expense_date": {"type": "string", "description": "Fecha YYYY-MM-DD (opcional)"},
                         },
@@ -83,7 +93,7 @@ class FinanceAgent(BaseAgent):
                 "type": "function",
                 "function": {
                     "name": "consultar_reporte",
-                    "description": "Consulta reporte de gastos",
+                    "description": "Consulta reporte de gastos por período",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -101,11 +111,11 @@ class FinanceAgent(BaseAgent):
                 "type": "function",
                 "function": {
                     "name": "consultar_presupuesto",
-                    "description": "Consulta estado del presupuesto",
+                    "description": "Consulta estado del presupuesto y lista las categorías existentes",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "category": {"type": "string", "description": "Categoría específica"},
+                            "category": {"type": "string", "description": "Categoría específica (opcional)"},
                         },
                     },
                 },
@@ -209,7 +219,7 @@ class FinanceAgent(BaseAgent):
 
                 logger.info(f"Finance tool call: {tool_name}", args=tool_args)
 
-                # Execute the tool (pass phone and message for error logging)
+                # Execute the tool
                 tool_result = await self._execute_tool(
                     tool_name, tool_args, tenant_id,
                     user_phone=phone,
@@ -217,9 +227,7 @@ class FinanceAgent(BaseAgent):
                 )
 
                 # Generate response based on tool result
-                response_text = await self._generate_response(
-                    tool_name, tool_args, tool_result, message
-                )
+                response_text = self._format_response(tool_name, tool_args, tool_result)
 
                 return AgentResult(
                     response=response_text,
@@ -229,7 +237,8 @@ class FinanceAgent(BaseAgent):
                     metadata={"tool": tool_name, "result": tool_result},
                 )
 
-            # Direct response
+            # Direct response from LLM (no tool called)
+            # This happens when the LLM decides to ask for clarification
             return AgentResult(
                 response=choice.message.content or "No pude procesar tu solicitud.",
                 agent_used=self.name,
@@ -239,7 +248,6 @@ class FinanceAgent(BaseAgent):
 
         except Exception as e:
             logger.error("Finance agent error", error=str(e))
-            # Log LLM error
             await quality_logger.log_hard_error(
                 tenant_id=tenant_id,
                 category="llm_error",
@@ -264,6 +272,8 @@ class FinanceAgent(BaseAgent):
         message_in: Optional[str] = None,
     ) -> dict[str, Any]:
         """Execute a finance tool by calling the backend API.
+        
+        This method ONLY executes the API call - no business logic decisions.
 
         Args:
             tool_name: Name of the tool.
@@ -281,6 +291,7 @@ class FinanceAgent(BaseAgent):
 
         async with httpx.AsyncClient() as client:
             try:
+                # Map tool names to HTTP calls
                 if tool_name == "registrar_gasto":
                     response = await client.post(
                         f"{base_url}/agent/expense",
@@ -336,7 +347,6 @@ class FinanceAgent(BaseAgent):
                 if response.status_code == 200:
                     return {"success": True, "data": response.json()}
                 else:
-                    # Log API error as hard error
                     error_text = response.text[:500] if response.text else "No response body"
                     await quality_logger.log_hard_error(
                         tenant_id=tenant_id,
@@ -386,23 +396,23 @@ class FinanceAgent(BaseAgent):
                 )
                 return {"success": False, "error": str(e)}
 
-    async def _generate_response(
+    def _format_response(
         self,
         tool_name: str,
         args: dict[str, Any],
         result: dict[str, Any],
-        original_message: str,
     ) -> str:
-        """Generate a user-friendly response from tool result.
+        """Format tool result for WhatsApp display.
+        
+        This method ONLY formats data - no business logic decisions.
 
         Args:
             tool_name: Name of the tool.
             args: Tool arguments.
             result: Tool execution result.
-            original_message: The original user message.
 
         Returns:
-            Formatted response.
+            Formatted response string.
         """
         if not result.get("success"):
             error = result.get("error", "Error desconocido")
@@ -413,14 +423,11 @@ class FinanceAgent(BaseAgent):
         if tool_name == "registrar_gasto":
             amount = args.get("amount", 0)
             category = args.get("category", "")
-            alert = data.get("alert")
             budget_status = data.get("budget_status")
             
             response = f"✅ Registré un gasto de ${amount:,.0f} en {category}."
             
-            # Add budget status if available
             if budget_status:
-                # Convert from string (JSON serialized Decimal) to float
                 remaining = float(budget_status.get("remaining", 0))
                 spent = float(budget_status.get("spent_this_month", 0))
                 limit = float(budget_status.get("monthly_limit", 0))
@@ -433,8 +440,6 @@ class FinanceAgent(BaseAgent):
                     response += f"\n\n⚠️ Te quedan ${remaining:,.0f} de ${limit:,.0f} en {category} ({pct:.0f}%)"
                 else:
                     response += f"\n\n💰 Te quedan ${remaining:,.0f} de ${limit:,.0f} en {category} ({pct:.0f}%)"
-            elif alert:
-                response += f"\n\n⚠️ {alert}"
             
             return response
 

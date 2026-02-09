@@ -24,6 +24,29 @@ class WhatsAppTextMessage(BaseModel):
     body: str
 
 
+class WhatsAppInteractiveListReply(BaseModel):
+    """Interactive list reply content."""
+
+    id: str
+    title: str
+    description: Optional[str] = None
+
+
+class WhatsAppInteractiveButtonReply(BaseModel):
+    """Interactive button reply content."""
+
+    id: str
+    title: str
+
+
+class WhatsAppInteractiveResponse(BaseModel):
+    """WhatsApp interactive response (list or button selection)."""
+
+    type: Literal["list_reply", "button_reply"]
+    list_reply: Optional[WhatsAppInteractiveListReply] = None
+    button_reply: Optional[WhatsAppInteractiveButtonReply] = None
+
+
 class WhatsAppMessage(BaseModel):
     """WhatsApp incoming message."""
 
@@ -32,6 +55,7 @@ class WhatsAppMessage(BaseModel):
     timestamp: str
     type: Literal["text", "image", "audio", "video", "document", "location", "contacts", "button", "interactive"]
     text: Optional[WhatsAppTextMessage] = None
+    interactive: Optional[WhatsAppInteractiveResponse] = None
 
     class Config:
         populate_by_name = True
@@ -86,6 +110,9 @@ class IncomingMessage(BaseModel):
     text: str
     timestamp: datetime
     contact_name: Optional[str] = None
+    is_interactive: bool = False
+    interactive_type: Optional[str] = None  # "list_reply" or "button_reply"
+    interactive_id: Optional[str] = None  # ID of the selected item
 
     @classmethod
     def from_webhook(
@@ -101,10 +128,45 @@ class IncomingMessage(BaseModel):
         if contact and contact.profile:
             contact_name = contact.profile.get("name")
 
+        # Handle text messages
+        if message.type == "text" and message.text:
+            return cls(
+                message_id=message.id,
+                phone=phone,
+                text=message.text.body,
+                timestamp=datetime.fromtimestamp(int(message.timestamp)),
+                contact_name=contact_name,
+            )
+
+        # Handle interactive responses (list or button selections)
+        if message.type == "interactive" and message.interactive:
+            interactive = message.interactive
+            interactive_id = None
+            text = ""
+
+            if interactive.type == "list_reply" and interactive.list_reply:
+                interactive_id = interactive.list_reply.id
+                text = interactive.list_reply.title
+            elif interactive.type == "button_reply" and interactive.button_reply:
+                interactive_id = interactive.button_reply.id
+                text = interactive.button_reply.title
+
+            return cls(
+                message_id=message.id,
+                phone=phone,
+                text=text,
+                timestamp=datetime.fromtimestamp(int(message.timestamp)),
+                contact_name=contact_name,
+                is_interactive=True,
+                interactive_type=interactive.type,
+                interactive_id=interactive_id,
+            )
+
+        # Fallback for other message types
         return cls(
             message_id=message.id,
             phone=phone,
-            text=message.text.body if message.text else "",
+            text="",
             timestamp=datetime.fromtimestamp(int(message.timestamp)),
             contact_name=contact_name,
         )

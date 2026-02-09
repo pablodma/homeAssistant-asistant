@@ -1,7 +1,10 @@
-"""WhatsApp webhook handler."""
+"""WhatsApp webhook handler.
+
+Note: All agent decision logic is in prompts, not in this code.
+This webhook only routes messages and sends responses.
+"""
 
 import asyncio
-from typing import Any
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Query, Request, Response
@@ -174,90 +177,20 @@ async def process_message(message: IncomingMessage) -> None:
             limit=10,
         )
 
-        # Check if this is a category selection response (interactive list reply)
-        if message.is_interactive and message.interactive_type == "list_reply":
-            # User selected a category from the list
-            pending_expense = await conversation_service.get_pending_expense(
-                phone=message.phone, tenant_id=tenant_id
-            )
-            
-            if pending_expense and message.interactive_id and message.interactive_id.startswith("cat_"):
-                # Complete the pending expense with selected category
-                from ..agents.finance import FinanceAgent
-                finance_agent = FinanceAgent()
-                
-                # Extract category name from selection (text is the category name)
-                selected_category = message.text
-                
-                result = await finance_agent.complete_pending_expense(
-                    tenant_id=tenant_id,
-                    phone=message.phone,
-                    pending_expense=pending_expense,
-                    selected_category=selected_category,
-                )
-                
-                # Clear pending expense
-                await conversation_service.clear_pending_expense(
-                    phone=message.phone, tenant_id=tenant_id
-                )
-                
-                agent_used = result.agent_used
-                await whatsapp.send_text(message.phone, result.response)
-            else:
-                # Unknown interactive response
-                agent_used = "router"
-                await whatsapp.send_text(message.phone, "No entendí tu selección. ¿Podés intentar de nuevo?")
-                result = AgentResult(response="No entendí tu selección.", agent_used="router")
-        else:
-            # Normal message processing
-            router_agent = RouterAgent()
-            result = await router_agent.process(
-                message=message.text,
-                phone=message.phone,
-                tenant_id=tenant_id,
-                history=history,
-            )
+        # Process message through router agent
+        # All decision logic is in the agent prompts - the code just routes and sends
+        router_agent = RouterAgent()
+        result = await router_agent.process(
+            message=message.text,
+            phone=message.phone,
+            tenant_id=tenant_id,
+            history=history,
+        )
 
-            agent_used = result.agent_used
+        agent_used = result.agent_used
 
-            # Check if agent needs category selection (interactive message)
-            tool_result = result.metadata.get("result", {}) if result.metadata else {}
-            if tool_result.get("needs_category_selection"):
-                # Store pending expense
-                pending = tool_result.get("pending_expense", {})
-                await conversation_service.set_pending_expense(
-                    phone=message.phone,
-                    tenant_id=tenant_id,
-                    amount=pending.get("amount", 0),
-                    description=pending.get("description"),
-                    original_category=pending.get("original_category"),
-                )
-                
-                # Send interactive list instead of text
-                categories = tool_result.get("categories", [])
-                sections = [{
-                    "title": "Categorías",
-                    "rows": [
-                        {
-                            "id": f"cat_{cat['id']}",
-                            "title": cat["name"][:24],
-                            "description": f"${float(cat.get('monthly_limit') or 0):,.0f}/mes" if cat.get("monthly_limit") else "Sin límite",
-                        }
-                        for cat in categories[:10]
-                    ]
-                }]
-                
-                amount = pending.get("amount", 0)
-                await whatsapp.send_interactive_list(
-                    phone=message.phone,
-                    header="Seleccionar categoría",
-                    body=f"¿A qué categoría querés asignar el gasto de ${amount:,.0f}?",
-                    button_text="Ver categorías",
-                    sections=sections,
-                )
-            else:
-                # Normal text response
-                await whatsapp.send_text(message.phone, result.response)
+        # Send response (always text - prompt handles conversational flows)
+        await whatsapp.send_text(message.phone, result.response)
 
         # Save to conversation history
         await conversation_service.add_message(

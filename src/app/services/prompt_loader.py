@@ -1,5 +1,12 @@
-"""Prompt loading service."""
+"""Prompt loading service.
 
+Prompts are loaded in this priority order:
+1. Database (agent_prompts table) - allows runtime editing
+2. Markdown files in docs/prompts/ - source of truth for version control
+3. Hardcoded defaults (only for router and qa agents)
+"""
+
+from pathlib import Path
 from typing import Optional
 
 import structlog
@@ -8,7 +15,20 @@ from ..config.database import get_pool
 
 logger = structlog.get_logger()
 
-# Default prompts (fallback if not in database)
+# Path to documented prompts (relative to project root)
+# In production, this resolves to the docs/prompts folder in the repo
+PROMPTS_DIR = Path(__file__).parent.parent.parent.parent.parent / "docs" / "prompts"
+
+# Mapping of agent names to their prompt files
+PROMPT_FILES = {
+    "finance": "finance-agent.md",
+    "calendar": "calendar-agent.md",
+    "reminder": "reminder-agent.md",
+    "shopping": "shopping-agent.md",
+    "vehicle": "vehicle-agent.md",
+}
+
+# Default prompts (fallback ONLY for router/qa which don't have markdown files)
 DEFAULT_PROMPTS = {
     "router": """Agente Orquestador Principal HomeAI. Te llamas Casita.
 
@@ -78,8 +98,49 @@ Considerá especialmente si el bot confirmó acciones que fallaron (hallucinatio
 }
 
 
+def _load_prompt_from_file(agent_name: str) -> Optional[str]:
+    """Load prompt from markdown file in docs/prompts/.
+    
+    Args:
+        agent_name: Name of the agent (finance, calendar, etc.)
+        
+    Returns:
+        Prompt content if file exists, None otherwise.
+    """
+    filename = PROMPT_FILES.get(agent_name)
+    if not filename:
+        return None
+    
+    prompt_path = PROMPTS_DIR / filename
+    
+    try:
+        if prompt_path.exists():
+            content = prompt_path.read_text(encoding="utf-8")
+            logger.debug(
+                "Loaded prompt from file",
+                agent_name=agent_name,
+                path=str(prompt_path),
+            )
+            return content
+    except Exception as e:
+        logger.warning(
+            "Failed to load prompt from file",
+            agent_name=agent_name,
+            path=str(prompt_path),
+            error=str(e),
+        )
+    
+    return None
+
+
 class PromptLoader:
-    """Service for loading agent prompts."""
+    """Service for loading agent prompts.
+    
+    Priority order:
+    1. Database (agent_prompts table)
+    2. Markdown file (docs/prompts/)
+    3. Hardcoded default (only for router/qa)
+    """
 
     async def get_prompt(
         self,
@@ -88,7 +149,7 @@ class PromptLoader:
     ) -> str:
         """Get the prompt for an agent.
 
-        First tries to load from database, falls back to default.
+        First tries to load from database, then from file, falls back to default.
 
         Args:
             agent_name: Name of the agent (router, finance, calendar, etc.)
@@ -97,6 +158,7 @@ class PromptLoader:
         Returns:
             The prompt content.
         """
+        # 1. Try database first (allows runtime editing)
         try:
             pool = await get_pool()
 
@@ -122,13 +184,31 @@ class PromptLoader:
 
         except Exception as e:
             logger.warning(
-                "Failed to load prompt from database, using default",
+                "Failed to load prompt from database",
                 agent_name=agent_name,
                 error=str(e),
             )
 
-        # Fallback to default
-        return DEFAULT_PROMPTS.get(agent_name, f"You are the {agent_name} agent.")
+        # 2. Try loading from markdown file (docs/prompts/)
+        file_prompt = _load_prompt_from_file(agent_name)
+        if file_prompt:
+            return file_prompt
+
+        # 3. Fallback to hardcoded default (only router/qa have these)
+        if agent_name in DEFAULT_PROMPTS:
+            logger.debug(
+                "Using hardcoded default prompt",
+                agent_name=agent_name,
+            )
+            return DEFAULT_PROMPTS[agent_name]
+
+        # 4. Last resort - generic prompt (should not happen if prompts are documented)
+        logger.warning(
+            "No prompt found for agent - using generic fallback",
+            agent_name=agent_name,
+            tenant_id=tenant_id,
+        )
+        return f"You are the {agent_name} agent."
 
     async def get_all_prompts(self, tenant_id: str) -> dict[str, str]:
         """Get all prompts for a tenant.
