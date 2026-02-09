@@ -1,52 +1,13 @@
 """Router Agent - Main orchestrator."""
 
-from typing import Any, Optional
+from typing import Optional
 
 import structlog
 from openai import AsyncOpenAI
 
-from ..config import get_settings
 from .base import AgentResult, BaseAgent
 
 logger = structlog.get_logger()
-
-
-# Agent routing configuration
-AGENT_KEYWORDS = {
-    "finance": [
-        "gast", "pagu", "plata", "dinero", "presupuesto", "cuánto", "cuanto",
-        "registr", "supermercado", "super", "nafta", "luz", "gas", "servicio",
-        "transporte", "entretenimiento", "restaurante", "café", "salud",
-        "farmacia", "medic", "hospital", "sueldo", "cobr", "$", "pesos",
-        "mensual", "semanal", "hoy gasté", "ayer gasté", "borrá", "eliminá",
-        "modific", "cambiá el gasto", "reporte", "resumen",
-    ],
-    "calendar": [
-        "reunión", "reunion", "turno", "cita", "evento", "agenda", "agendar",
-        "agendá", "agendame", "calendario", "programado", "mañana a las",
-        "hoy a las", "el lunes", "el martes", "el miércoles", "el jueves",
-        "el viernes", "el sábado", "el domingo", "próxima semana",
-        "cancelá", "cancelar", "mover", "cambiar fecha", "qué tengo",
-        "disponibilidad", "libre", "ocupado", "google calendar",
-    ],
-    "reminder": [
-        "recordame", "recordá", "acordate", "avisame", "no me olvide",
-        "recordatorio", "alarma", "alerta", "pendiente", "avisar",
-        "notificame", "notificación",
-    ],
-    "shopping": [
-        "lista", "compras", "supermercado", "comprar", "agregar a la lista",
-        "agregá", "poneme", "necesito comprar", "falta", "ya compré",
-        "marcar comprado", "lista del super", "items", "productos",
-    ],
-    "vehicle": [
-        "auto", "coche", "vehículo", "vehiculo", "service", "aceite",
-        "vtv", "seguro del auto", "patente", "kilometraje", "km",
-        "mantenimiento", "taller", "mecánico", "mecanico", "cubiertas",
-        "neumáticos", "neumaticos", "frenos", "batería", "bateria",
-        "correa", "filtro", "bujías", "bujias",
-    ],
-}
 
 
 class RouterAgent(BaseAgent):
@@ -88,29 +49,6 @@ class RouterAgent(BaseAgent):
 
         return self._sub_agents.get(agent_name)
 
-    def _detect_agent(self, message: str) -> Optional[str]:
-        """Detect which agent should handle the message based on keywords.
-
-        Args:
-            message: The user's message.
-
-        Returns:
-            Agent name or None if unclear.
-        """
-        message_lower = message.lower()
-
-        scores = {}
-        for agent_name, keywords in AGENT_KEYWORDS.items():
-            score = sum(1 for kw in keywords if kw in message_lower)
-            if score > 0:
-                scores[agent_name] = score
-
-        if not scores:
-            return None
-
-        # Return agent with highest score
-        return max(scores, key=scores.get)
-
     async def process(
         self,
         message: str,
@@ -120,6 +58,9 @@ class RouterAgent(BaseAgent):
         **kwargs,
     ) -> AgentResult:
         """Process a message by routing to the appropriate sub-agent.
+
+        Uses LLM-only routing (no keyword detection).
+        See ADR-002: docs/architecture/decisions/002-llm-only-routing.md
 
         Args:
             message: The user's message.
@@ -136,27 +77,7 @@ class RouterAgent(BaseAgent):
             message=message[:50] + "..." if len(message) > 50 else message,
         )
 
-        # First, try keyword-based detection
-        detected_agent = self._detect_agent(message)
-
-        if detected_agent:
-            logger.info(f"Keyword detection: routing to {detected_agent}")
-            sub_agent = self._get_sub_agent(detected_agent)
-            if sub_agent:
-                try:
-                    result = await sub_agent.process(
-                        message=message,
-                        phone=phone,
-                        tenant_id=tenant_id,
-                        history=history,
-                    )
-                    result.agent_used = self.name
-                    result.sub_agent_used = detected_agent
-                    return result
-                except Exception as e:
-                    logger.error(f"Sub-agent {detected_agent} failed", error=str(e))
-
-        # If no clear agent detected or sub-agent failed, use LLM routing
+        # LLM-only routing - all logic defined in prompt
         return await self._process_with_llm(
             message=message,
             phone=phone,

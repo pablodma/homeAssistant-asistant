@@ -34,9 +34,9 @@ globs:
 │                           ▼                                      │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │                    ROUTER AGENT                           │   │
-│  │  - Keyword detection (rápido, sin LLM)                   │   │
-│  │  - LLM fallback con tool calling                         │   │
+│  │  - LLM con tool calling (100% prompt-driven)             │   │
 │  │  - Decide qué sub-agente usar                            │   │
+│  │  - Ver ADR-002: docs/architecture/decisions/             │   │
 │  └────────────────────────┬─────────────────────────────────┘   │
 │                           │                                      │
 │           ┌───────────────┼───────────────┐                     │
@@ -116,7 +116,7 @@ homeai-assis/
 
 ### Router Agent (Orquestador)
 - **Función**: Decide qué sub-agente debe manejar cada mensaje
-- **Método**: Keyword detection + LLM fallback (gpt-4.1-mini con tool calling)
+- **Método**: LLM-only con tool calling (gpt-4.1-mini) - Ver ADR-002
 - **Prompt**: `docs/prompts/router-agent.md`
 
 ### QA Agent (Control de Calidad)
@@ -133,13 +133,13 @@ homeai-assis/
 
 ### Sub-Agentes
 
-| Agente | Keywords | Backend/DB | Prompt |
-|--------|----------|------------|--------|
-| **Finance** | `gast`, `compra`, `pagu`, `presupuesto` | Backend API | `docs/prompts/finance-agent.md` |
-| **Calendar** | `agenda`, `evento`, `reunión`, `cita`, `turno` | Backend API | `docs/prompts/calendar-agent.md` |
-| **Reminder** | `recorda`, `avisa`, `alerta` | PostgreSQL directo | `docs/prompts/reminder-agent.md` |
-| **Shopping** | `lista`, `super`, `compras`, `agreg`, `falta` | PostgreSQL directo | `docs/prompts/shopping-agent.md` |
-| **Vehicle** | `auto`, `coche`, `service`, `nafta`, `combustible` | PostgreSQL directo | `docs/prompts/vehicle-agent.md` |
+| Agente | Backend/DB | Prompt |
+|--------|------------|--------|
+| **Finance** | Backend API | `docs/prompts/finance-agent.md` |
+| **Calendar** | Backend API | `docs/prompts/calendar-agent.md` |
+| **Reminder** | PostgreSQL directo | `docs/prompts/reminder-agent.md` |
+| **Shopping** | PostgreSQL directo | `docs/prompts/shopping-agent.md` |
+| **Vehicle** | PostgreSQL directo | `docs/prompts/vehicle-agent.md` |
 
 ## Comunicación con Backend
 

@@ -177,8 +177,34 @@ Casos de uso con el comportamiento esperado.
 
 ---
 
+## Regla #8: Ruteo LLM-Only (ADR-002)
+
+**El RouterAgent usa exclusivamente LLM para decidir qué sub-agente maneja cada mensaje.**
+
+### Lo que esto significa:
+
+- **NO hay keyword detection** - Todo el ruteo pasa por el LLM
+- El prompt del router (`docs/prompts/router-agent.md`) define todas las reglas de ruteo
+- Cambios de comportamiento en ruteo = cambios al prompt del router
+
+### Por qué:
+
+- Consistencia con arquitectura prompt-first
+- El LLM maneja casos ambiguos que keywords no podían resolver
+- Una sola fuente de verdad para lógica de ruteo
+
+### Trade-offs aceptados:
+
+- Mayor costo de tokens por mensaje (~500-1000 tokens adicionales)
+- Latencia adicional (~200-500ms)
+
+**Ver decisión completa:** `docs/architecture/decisions/002-llm-only-routing.md`
+
+---
+
 ## Referencias
 
 - Archivos de prompts: `docs/prompts/`
 - Loader de prompts: `src/app/services/prompt_loader.py`
 - Agentes: `src/app/agents/`
+- ADRs: `docs/architecture/decisions/`
