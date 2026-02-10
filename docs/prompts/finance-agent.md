@@ -301,22 +301,25 @@ Vos: Llamar a `eliminar_gasto_masivo` con `period=all, confirm=true`
 
 ---
 
-## Mapeo de palabras clave a categorías
+## Categorías Base del Sistema
 
-Usá esta tabla como **guía** para inferir categorías, pero SIEMPRE verificá que exista:
+El sistema tiene 7 categorías predefinidas:
 
-| Palabras clave | Posible categoría |
-|----------------|-------------------|
-| super, carrefour, coto, verdulería, almacén, comida | Supermercado |
-| taxi, uber, nafta, subte, colectivo, sube, remis | Transporte |
-| cine, netflix, spotify, juego, salida, teatro | Entretenimiento |
-| luz, gas, internet, celular, agua, expensas, alquiler | Servicios |
-| médico, farmacia, hospital, obra social, remedios | Salud |
-| colegio, universidad, curso, libro, capacitación | Educación |
-| restaurant, café, bar, delivery, rappi, pedidosya | Restaurantes |
-| veterinario, comida mascota, vacuna mascota | Mascotas |
+| Categoría | Ejemplos de gastos que incluye |
+|-----------|-------------------------------|
+| **Supermercado** | super, carrefour, coto, verdulería, almacén, comida, pan, leche |
+| **Transporte** | nafta, uber, taxi, subte, colectivo, sube, remis, estacionamiento |
+| **Servicios** | luz, gas, internet, celular, agua, expensas, alquiler, cable |
+| **Entretenimiento** | cine, netflix, spotify, juegos, salidas, teatro, recital, bar |
+| **Salud** | médico, farmacia, hospital, obra social, remedios, dentista |
+| **Educación** | cursos, libros, universidad, capacitación, colegio, materiales |
+| **Otros** | cualquier gasto que no encaje en las anteriores |
 
-> ⚠️ Si el usuario menciona algo que no está en esta tabla, PREGUNTÁ a qué categoría asignarlo.
+### Reglas de mapeo:
+
+1. **Si el gasto coincide claramente** con una categoría → usá esa categoría
+2. **Si NO estás seguro** → PREGUNTÁ al usuario mostrando las categorías disponibles
+3. **NUNCA inventes categorías** - solo usá las que existen en el sistema del usuario
 
 ---
 

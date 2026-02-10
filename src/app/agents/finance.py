@@ -59,10 +59,6 @@ class FinanceAgent(BaseAgent):
 
         prompt = await self.get_prompt(tenant_id)
 
-        # #region agent log H1,H3: Log prompt and message for debugging
-        logger.debug("DEBUG_H3_prompt", prompt_length=len(prompt), prompt_first_200=prompt[:200], user_message=message)
-        # #endregion
-
         # Build messages
         messages = [
             {"role": "system", "content": prompt},
@@ -73,11 +69,6 @@ class FinanceAgent(BaseAgent):
             messages.append({"role": msg.role, "content": msg.content})
 
         messages.append({"role": "user", "content": message})
-
-        # #region agent log H4,H5: Log full messages being sent to LLM
-        msgs_summary = [{"role":m["role"],"content_len":len(m["content"]),"content_preview":m["content"][:100]} for m in messages]
-        logger.debug("DEBUG_H4H5_messages", num_messages=len(messages), history_count=len(history), messages_summary=msgs_summary)
-        # #endregion
 
         # Define tools - these are CAPABILITIES, the prompt decides WHEN to use them
         tools = [
@@ -228,11 +219,6 @@ class FinanceAgent(BaseAgent):
 
                 logger.info(f"Finance tool call: {tool_name}", args=tool_args)
 
-                # #region agent log H1,H2: Log tool call details and ALL tool calls
-                all_tools = [{"name": tc.function.name, "args": tc.function.arguments} for tc in choice.message.tool_calls]
-                logger.debug("DEBUG_H1H2_tool_call", tool_name=tool_name, tool_args=tool_args, all_tool_calls=all_tools, num_tool_calls=len(choice.message.tool_calls), finish_reason=str(choice.finish_reason))
-                # #endregion
-
                 # Execute the tool
                 tool_result = await self._execute_tool(
                     tool_name, tool_args, tenant_id,
@@ -240,16 +226,8 @@ class FinanceAgent(BaseAgent):
                     message_in=message,
                 )
 
-                # #region agent log H1: Log tool result BEFORE formatting
-                logger.debug("DEBUG_H1_tool_result", tool_name=tool_name, tool_result_success=tool_result.get("success"), tool_result_data_keys=list(tool_result.get("data",{}).keys()) if tool_result.get("data") else None, budgets_count=len(tool_result.get("data",{}).get("budgets",[])) if tool_result.get("data") else 0)
-                # #endregion
-
                 # Generate response based on tool result
                 response_text = self._format_response(tool_name, tool_args, tool_result)
-
-                # #region agent log H1: Log final response (hardcoded formatting, no LLM processing)
-                logger.debug("DEBUG_H1_final_response", response_preview=response_text[:150], tool_name=tool_name)
-                # #endregion
 
                 return AgentResult(
                     response=response_text,
@@ -261,9 +239,6 @@ class FinanceAgent(BaseAgent):
 
             # Direct response from LLM (no tool called)
             # This happens when the LLM decides to ask for clarification
-            # #region agent log H2: Log when LLM responds without tool call
-            logger.debug("DEBUG_H2_no_tool", response_preview=(choice.message.content or "")[:150], finish_reason=str(choice.finish_reason))
-            # #endregion
             return AgentResult(
                 response=choice.message.content or "No pude procesar tu solicitud.",
                 agent_used=self.name,
