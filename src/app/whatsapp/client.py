@@ -248,6 +248,47 @@ class WhatsAppClient:
             logger.warning("Failed to mark message as read", error=str(e))
             return False
 
+    async def mark_as_read_and_typing(self, message_id: str) -> bool:
+        """Mark a message as read and show typing indicator.
+
+        The typing indicator disappears when a response is sent or after 25 seconds.
+        Use this when the bot will take a few seconds to respond.
+
+        Args:
+            message_id: The WhatsApp message ID.
+
+        Returns:
+            True if sent successfully.
+        """
+        url = f"{WHATSAPP_API_URL}/{self.phone_number_id}/messages"
+
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "status": "read",
+            "message_id": message_id,
+            "typing_indicator": {"type": "text"},
+        }
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=10.0,
+                )
+                return response.status_code == 200
+        except Exception as e:
+            logger.warning(
+                "Failed to send typing indicator", error=str(e)
+            )
+            return False
+
 
 # Global client instance
 _client: Optional[WhatsAppClient] = None

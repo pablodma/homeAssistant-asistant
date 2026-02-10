@@ -133,8 +133,8 @@ async def process_message(message: IncomingMessage) -> None:
     )
 
     try:
-        # Mark message as read
-        await whatsapp.mark_as_read(message.message_id)
+        # Mark message as read and show typing indicator
+        await whatsapp.mark_as_read_and_typing(message.message_id)
 
         # Resolve tenant by phone number
         phone_resolver = get_phone_resolver()
