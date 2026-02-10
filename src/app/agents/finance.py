@@ -70,7 +70,7 @@ class FinanceAgent(BaseAgent):
 
         messages.append({"role": "user", "content": message})
 
-        # Define tools - these are CAPABILITIES, the prompt decides WHEN to use them
+        # Define tools
         tools = [
             {
                 "type": "function",
@@ -198,52 +198,98 @@ class FinanceAgent(BaseAgent):
         ]
 
         try:
-            response = await self.client.chat.completions.create(
-                model=self.settings.openai_model,
-                messages=messages,
-                tools=tools,
-                tool_choice="auto",
-                max_tokens=1000,
-                temperature=0.3,
-            )
+            total_tokens_in = 0
+            total_tokens_out = 0
+            max_tool_rounds = 5
 
-            choice = response.choices[0]
-            tokens_in = response.usage.prompt_tokens if response.usage else None
-            tokens_out = response.usage.completion_tokens if response.usage else None
+            for _ in range(max_tool_rounds):
+                response = await self.client.chat.completions.create(
+                    model=self.settings.openai_model,
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",
+                    max_tokens=1000,
+                    temperature=0.3,
+                )
 
-            # Check if tool was called
-            if choice.message.tool_calls:
+                choice = response.choices[0]
+                if response.usage:
+                    total_tokens_in += response.usage.prompt_tokens
+                    total_tokens_out += response.usage.completion_tokens
+
+                # LLM returned text (no tool call) -> final response
+                if not choice.message.tool_calls:
+                    return AgentResult(
+                        response=choice.message.content or "No pude procesar tu solicitud.",
+                        agent_used=self.name,
+                        tokens_in=total_tokens_in,
+                        tokens_out=total_tokens_out,
+                    )
+
+                # LLM called a tool -> execute, append result, loop again
                 tool_call = choice.message.tool_calls[0]
                 tool_name = tool_call.function.name
                 tool_args = json.loads(tool_call.function.arguments)
 
                 logger.info(f"Finance tool call: {tool_name}", args=tool_args)
 
-                # Execute the tool
                 tool_result = await self._execute_tool(
                     tool_name, tool_args, tenant_id,
                     user_phone=phone,
                     message_in=message,
                 )
 
-                # Generate response based on tool result
-                response_text = self._format_response(tool_name, tool_args, tool_result)
+                # Append assistant message with tool_calls
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": choice.message.content or None,
+                        "tool_calls": [
+                            {
+                                "id": tool_call.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tool_name,
+                                    "arguments": tool_call.function.arguments,
+                                },
+                            }
+                        ],
+                    }
+                )
 
+                # Append tool result for LLM to reason about
+                tool_result_for_llm = self._format_tool_result_for_llm(
+                    tool_name, tool_args, tool_result
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": tool_result_for_llm,
+                    }
+                )
+
+                # consultar_presupuesto: always continue loop so LLM can reason
+                # (e.g. during expense registration: see categories, then ask or register)
+                if tool_name == "consultar_presupuesto":
+                    continue
+
+                # Other tools: return formatted response
+                response_text = self._format_response(tool_name, tool_args, tool_result)
                 return AgentResult(
                     response=response_text,
                     agent_used=self.name,
-                    tokens_in=tokens_in,
-                    tokens_out=tokens_out,
+                    tokens_in=total_tokens_in,
+                    tokens_out=total_tokens_out,
                     metadata={"tool": tool_name, "result": tool_result},
                 )
 
-            # Direct response from LLM (no tool called)
-            # This happens when the LLM decides to ask for clarification
+            # Max rounds reached
             return AgentResult(
-                response=choice.message.content or "No pude procesar tu solicitud.",
+                response="No pude completar la operación. Intentá de nuevo.",
                 agent_used=self.name,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
+                tokens_in=total_tokens_in,
+                tokens_out=total_tokens_out,
             )
 
         except Exception as e:
@@ -395,6 +441,34 @@ class FinanceAgent(BaseAgent):
                     exception=e,
                 )
                 return {"success": False, "error": str(e)}
+
+    def _format_tool_result_for_llm(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        result: dict[str, Any],
+    ) -> str:
+        """Format tool result for LLM to reason about (not for user display)."""
+        if not result.get("success"):
+            return f"Error: {result.get('error', 'Error desconocido')}"
+
+        data = result.get("data", {})
+
+        if tool_name == "consultar_presupuesto":
+            budgets = data.get("budgets", [])
+            if not budgets:
+                return "No hay categorías configuradas."
+            categories = [b.get("category", "") for b in budgets]
+            lines = [f"Categorías disponibles: {', '.join(categories)}"]
+            for b in budgets:
+                name = b.get("category", "")
+                limit = float(b.get("limit", 0) or 0)
+                spent = float(b.get("spent", 0) or 0)
+                remaining = float(b.get("remaining", 0) or 0)
+                lines.append(f"- {name}: límite ${limit:,.0f}/mes, gastado ${spent:,.0f}, restante ${remaining:,.0f}")
+            return "\n".join(lines)
+
+        return json.dumps(data, ensure_ascii=False)
 
     def _format_response(
         self,
