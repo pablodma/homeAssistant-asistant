@@ -82,7 +82,7 @@ class FinanceAgent(BaseAgent):
                         "properties": {
                             "amount": {"type": "number", "description": "Monto del gasto"},
                             "category": {"type": "string", "description": "Categoría del gasto (debe existir)"},
-                            "description": {"type": "string", "description": "Descripción opcional"},
+                            "description": {"type": "string", "description": "Lo que el usuario menciona sobre el gasto (ej: combustible, verdulería, algo raro). Siempre incluir cuando el usuario lo diga."},
                             "expense_date": {"type": "string", "description": "Fecha YYYY-MM-DD (opcional)"},
                         },
                         "required": ["amount", "category"],
