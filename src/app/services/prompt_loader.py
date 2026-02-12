@@ -34,6 +34,7 @@ PROMPT_FILES = {
     "vehicle": "vehicle-agent.md",
     "router": "router-agent.md",
     "qa": "qa-agent.md",
+    "qa-reviewer": "qa-reviewer-agent.md",
 }
 
 
