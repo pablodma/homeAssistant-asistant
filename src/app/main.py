@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .config.database import close_pool, get_pool
+from .routers.internal import router as internal_router
 from .whatsapp.webhook import router as webhook_router
 
 logger = structlog.get_logger()
@@ -82,6 +83,9 @@ def create_app() -> FastAPI:
 
     # WhatsApp webhook router
     app.include_router(webhook_router)
+
+    # Internal API router (QA Review trigger via curl/CLI)
+    app.include_router(internal_router)
 
     return app
 
