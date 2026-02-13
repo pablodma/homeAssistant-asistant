@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 import structlog
-from openai import AsyncOpenAI
+from anthropic import AsyncAnthropic
 
 from ..config import get_settings
 from ..services.prompt_loader import PromptLoader
@@ -32,6 +32,8 @@ class QAAgent:
     - Hallucinations: Bot confirmed something that didn't happen
     - Unsupported cases: User requested something bot can't do
     - Incomplete responses: Response missing important information
+
+    Uses Claude Opus via Anthropic SDK.
     """
 
     name = "qa"
@@ -59,7 +61,7 @@ Si no hay problema, respondé: {{"has_issue": false, "category": null, "explanat
     def __init__(self):
         """Initialize the QA agent."""
         self.settings = get_settings()
-        self.client = AsyncOpenAI(api_key=self.settings.openai_api_key)
+        self.client = AsyncAnthropic(api_key=self.settings.anthropic_api_key)
         self.prompt_loader = PromptLoader()
         self._prompt_cache: dict[str, str] = {}
 
@@ -118,11 +120,11 @@ Si no hay problema, respondé: {{"has_issue": false, "category": null, "explanat
                 tool_result=tool_result_str,
             )
 
-            # Call LLM
-            response = await self.client.chat.completions.create(
-                model="gpt-4o-mini",  # Cheaper model for QA
+            # Call Claude via Anthropic SDK
+            response = await self.client.messages.create(
+                model=self.settings.qa_model,
+                system=system_prompt,
                 messages=[
-                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
                 max_tokens=500,
@@ -130,8 +132,8 @@ Si no hay problema, respondé: {{"has_issue": false, "category": null, "explanat
             )
 
             # Parse response
-            content = response.choices[0].message.content or "{}"
-            
+            content = response.content[0].text if response.content else "{}"
+
             # Clean markdown if present
             if content.startswith("```"):
                 content = content.split("```")[1]

@@ -29,9 +29,22 @@ class Settings(BaseSettings):
     whatsapp_verify_token: str
     whatsapp_access_token: str
 
-    # OpenAI
+    # OpenAI (used by router, finance, calendar, etc.)
     openai_api_key: str
     openai_model: str = "gpt-4.1-mini"
+
+    # Anthropic (used by QA agents)
+    anthropic_api_key: str = ""
+    qa_model: str = "claude-opus-4-20250514"  # QA Agent (Quality Control)
+    qa_review_model: str = "claude-opus-4-20250514"  # QA Reviewer (Mejora Continua)
+    qa_review_max_improvements: int = 3
+    qa_review_cooldown_hours: int = 24
+    qa_review_min_issues: int = 2
+
+    # GitHub API (for prompt editing by QA Reviewer)
+    github_token: str = ""
+    github_repo: str = "pablodma/homeAssistant-asistant"
+    github_branch: str = "master"
 
     # Backend API
     backend_api_url: str = "https://homeassistant-backend-production.up.railway.app"
