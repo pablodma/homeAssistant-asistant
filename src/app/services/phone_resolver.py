@@ -43,7 +43,7 @@ class PhoneResolver:
         Returns:
             PhoneTenantInfo if found, None if phone is not registered
         """
-        # Check cache first
+        # Check cache first (only positive results are cached)
         if phone in self._cache:
             logger.debug("phone_cache_hit", phone=phone)
             return self._cache[phone]
@@ -51,8 +51,9 @@ class PhoneResolver:
         # Query backend
         result = await self._lookup_phone(phone)
         
-        # Cache result (including None for unregistered phones)
-        self._cache[phone] = result
+        # Only cache positive results - unregistered phones may register later
+        if result is not None:
+            self._cache[phone] = result
         
         return result
     
