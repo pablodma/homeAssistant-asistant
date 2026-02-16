@@ -222,16 +222,6 @@ async def process_message(message: IncomingMessage) -> None:
             metadata=result.metadata,
         )
 
-        # #region agent log
-        logger.info(
-            "[DEBUG] interaction_log_result",
-            interaction_id=interaction_id,
-            interaction_id_is_none=interaction_id is None,
-            agent_used=result.agent_used,
-            hypothesisId="H3",
-        )
-        # #endregion
-
         logger.info(
             "Message processed successfully",
             phone=message.phone,
@@ -262,17 +252,6 @@ async def process_message(message: IncomingMessage) -> None:
             error=str(e),
             tenant_id=tenant_id,
         )
-
-        # #region agent log
-        logger.error(
-            "[DEBUG] process_message_exception",
-            error_type=type(e).__name__,
-            error_str=str(e),
-            tenant_id=tenant_id,
-            agent_used=agent_used,
-            hypothesisId="H2",
-        )
-        # #endregion
 
         # Log hard error
         if tenant_id:
