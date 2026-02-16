@@ -1,10 +1,10 @@
 """GitHub API service for editing prompt files.
 
-This service allows the QA Reviewer to update agent prompts via GitHub API,
+This service allows the Prompt Improver to update agent prompts via GitHub API,
 which then triggers automatic Railway deployment.
 
 Flow:
-1. QA Reviewer identifies prompt improvements
+1. Prompt Improver identifies prompt improvements
 2. Calls GitHub API to update the prompt file
 3. GitHub triggers webhook → Railway redeploys (~30 sec)
 """
@@ -28,7 +28,7 @@ PROMPT_FILE_PATHS = {
     "shopping": "docs/prompts/shopping-agent.md",
     "vehicle": "docs/prompts/vehicle-agent.md",
     "qa": "docs/prompts/qa-agent.md",
-    "qa-reviewer": "docs/prompts/qa-reviewer-agent.md",
+    "prompt-improver": "docs/prompts/prompt-improver-agent.md",
 }
 
 
@@ -112,8 +112,8 @@ class GitHubService:
         file_path: str,
         content: str,
         commit_message: str,
-        committer_name: str = "HomeAI QA Reviewer",
-        committer_email: str = "qa-reviewer@homeai.app",
+        committer_name: str = "HomeAI Prompt Improver",
+        committer_email: str = "prompt-improver@homeai.app",
     ) -> dict:
         """Update a file in the repository.
 
@@ -192,7 +192,7 @@ class GitHubService:
         self,
         agent_name: str,
         content: str,
-        updated_by: str = "QA Reviewer",
+        updated_by: str = "Prompt Improver",
     ) -> dict:
         """Update an agent's prompt file.
 
@@ -223,8 +223,8 @@ class GitHubService:
             file_path=file_path,
             content=content,
             commit_message=commit_message,
-            committer_name=f"HomeAI QA Reviewer ({updated_by})",
-            committer_email="qa-reviewer@homeai.app",
+            committer_name=f"HomeAI Prompt Improver ({updated_by})",
+            committer_email="prompt-improver@homeai.app",
         )
 
     async def get_prompt(self, agent_name: str) -> str:

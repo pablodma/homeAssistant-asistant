@@ -34,10 +34,10 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4.1-mini"
     whisper_model: str = "whisper-1"
 
-    # Anthropic (used by QA agents)
+    # Anthropic (used by QA and Prompt Improver agents)
     anthropic_api_key: str = ""
-    qa_model: str = "claude-opus-4-20250514"  # QA Agent (Quality Control)
-    qa_review_model: str = "claude-opus-4-20250514"  # QA Reviewer (Mejora Continua)
+    qa_model: str = "claude-opus-4-6"  # QA Agent (Quality Control)
+    qa_review_model: str = "claude-opus-4-6"  # Prompt Improver (Mejora Continua)
     qa_review_max_improvements: int = 3
     qa_review_cooldown_hours: int = 24
     qa_review_min_issues: int = 2

@@ -35,7 +35,7 @@ PROMPT_FILES = {
     "subscription": "subscription-agent.md",
     "router": "router-agent.md",
     "qa": "qa-agent.md",
-    "qa-reviewer": "qa-reviewer-agent.md",
+    "prompt-improver": "prompt-improver-agent.md",
 }
 
 

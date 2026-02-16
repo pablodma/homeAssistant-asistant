@@ -1,8 +1,8 @@
-"""QA Batch Reviewer - Analyzes quality issues and improves agent prompts.
+"""Prompt Improver - Analyzes quality issues and improves agent prompts.
 
 On-demand service triggered via internal API endpoint (curl / Railway CLI) that:
 1. Fetches unresolved quality issues (soft + hard errors)
-2. Sends them to Claude for analysis (using qa-reviewer prompt)
+2. Sends them to Claude for analysis (using prompt-improver prompt)
 3. For each agent with improvement proposals, generates improved prompts
 4. Applies improvements via GitHub API
 5. Stores revision history for rollback
@@ -331,18 +331,18 @@ class QABatchReviewer:
         """Load the QA Reviewer prompt from GitHub or local fallback."""
         try:
             if self.github.is_configured:
-                return await self.github.get_prompt("qa-reviewer")
+                return await self.github.get_prompt("prompt-improver")
         except GitHubServiceError:
-            logger.warning("Failed to load qa-reviewer prompt from GitHub, using local fallback")
+            logger.warning("Failed to load prompt-improver prompt from GitHub, using local fallback")
 
         # Local fallback
         from pathlib import Path
 
-        local_path = Path(__file__).parent.parent.parent.parent / "docs" / "prompts" / "qa-reviewer-agent.md"
+        local_path = Path(__file__).parent.parent.parent.parent / "docs" / "prompts" / "prompt-improver-agent.md"
         if local_path.exists():
             return local_path.read_text(encoding="utf-8")
 
-        raise ValueError("QA Reviewer prompt not found. Check docs/prompts/qa-reviewer-agent.md")
+        raise ValueError("Prompt Improver prompt not found. Check docs/prompts/prompt-improver-agent.md")
 
     async def _run_analysis(self, filled_prompt: str) -> str:
         """Run Step 1: Claude analyzes issues using the QA Reviewer prompt."""
