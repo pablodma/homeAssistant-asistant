@@ -44,10 +44,10 @@ class Settings(BaseSettings):
     # GitHub API (for prompt editing by QA Reviewer)
     github_token: str = ""
     github_repo: str = "pablodma/homeAssistant-asistant"
-    github_branch: str = "master"
+    github_branch: str = "main"
 
     # Backend API
-    backend_api_url: str = "https://homeassistant-backend-production.up.railway.app"
+    backend_api_url: str = "http://localhost:8000"
     backend_api_key: str = ""
 
     # Database

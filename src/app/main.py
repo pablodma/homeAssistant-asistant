@@ -25,12 +25,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         env=settings.app_env,
     )
 
+    # #region agent log
+    import os
+    db_url = settings.database_url
+    db_host = db_url.split("@")[1].split("/")[0] if "@" in db_url else "unknown"
+    logger.info(
+        "[DEBUG] startup_env_check",
+        app_env=settings.app_env,
+        db_host=db_host,
+        backend_url=settings.backend_api_url,
+        railway_env=os.environ.get("RAILWAY_ENVIRONMENT_NAME", "not_set"),
+        hypothesisId="H1",
+    )
+    # #endregion
+
     # Initialize database pool
     try:
         await get_pool()
         logger.info("Database pool initialized")
+        # #region agent log
+        logger.info("[DEBUG] db_pool_created_ok", hypothesisId="H1")
+        # #endregion
     except Exception as e:
         logger.error("Database connection failed", error=str(e))
+        # #region agent log
+        logger.error("[DEBUG] db_pool_creation_failed", error=str(e), db_host=db_host, hypothesisId="H1")
+        # #endregion
         logger.warning("App will start but database operations will fail")
 
     yield
