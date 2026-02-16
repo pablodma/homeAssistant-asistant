@@ -339,14 +339,20 @@ class QABatchReviewer:
 
     async def _run_analysis(self, filled_prompt: str) -> str:
         """Run Step 1: Claude analyzes issues using the QA Reviewer prompt."""
-        response = await self.client.messages.create(
+        # #region agent log
+        import json as _json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a").write(_json.dumps({"location":"qa_reviewer.py:_run_analysis","message":"Starting analysis","data":{"model":self.settings.qa_review_model},"timestamp":__import__("time").time(),"hypothesisId":"A","runId":"fix1"})+"\n")
+        # #endregion
+        async with self.client.messages.stream(
             model=self.settings.qa_review_model,
             max_tokens=8000,
             messages=[
                 {"role": "user", "content": filled_prompt},
             ],
-        )
-
+        ) as stream:
+            response = await stream.get_final_message()
+        # #region agent log
+        open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a").write(_json.dumps({"location":"qa_reviewer.py:_run_analysis","message":"Analysis complete","data":{"stop_reason":response.stop_reason,"content_len":len(response.content[0].text)},"timestamp":__import__("time").time(),"hypothesisId":"A","runId":"fix1"})+"\n")
+        # #endregion
         return response.content[0].text
 
     def _parse_xml_response(self, response: str) -> dict[str, Any]:
@@ -542,7 +548,10 @@ class QABatchReviewer:
         # Call Claude for improvement
         # max_tokens=16000 to avoid truncation: the improved_prompt field contains
         # the full agent prompt which can be thousands of tokens when JSON-encoded.
-        response = await self.client.messages.create(
+        # #region agent log
+        import json as _json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a").write(_json.dumps({"location":"qa_reviewer.py:_improve_agent_prompt","message":"Starting improvement","data":{"agent":agent_name,"model":self.settings.qa_review_model},"timestamp":__import__("time").time(),"hypothesisId":"A","runId":"fix1"})+"\n")
+        # #endregion
+        async with self.client.messages.stream(
             model=self.settings.qa_review_model,
             max_tokens=16000,
             system=PROMPT_IMPROVER_SYSTEM,
@@ -550,9 +559,13 @@ class QABatchReviewer:
                 {"role": "user", "content": user_message},
             ],
             temperature=0.2,
-        )
+        ) as stream:
+            response = await stream.get_final_message()
 
         content = response.content[0].text
+        # #region agent log
+        open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a").write(_json.dumps({"location":"qa_reviewer.py:_improve_agent_prompt","message":"Improvement complete","data":{"agent":agent_name,"stop_reason":response.stop_reason,"content_len":len(content)},"timestamp":__import__("time").time(),"hypothesisId":"A","runId":"fix1"})+"\n")
+        # #endregion
 
         # Check if response was truncated (stop_reason == "max_tokens")
         if response.stop_reason == "max_tokens":
@@ -699,6 +712,9 @@ class QABatchReviewer:
         Raises:
             ValueError: If issue not found, no agent, or fix cannot be applied.
         """
+        # #region agent log
+        import json as _json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a").write(_json.dumps({"location":"qa_reviewer.py:fix_single_issue","message":"Fix started","data":{"issue_id":issue_id},"timestamp":__import__("time").time(),"hypothesisId":"A","runId":"fix1"})+"\n")
+        # #endregion
         pool = await get_pool()
 
         # Fetch the issue
