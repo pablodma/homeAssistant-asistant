@@ -227,29 +227,45 @@ async def trigger_qa_review_all(
 # =====================================================
 
 
-@router.post("/qa-fix-issue")
-async def fix_single_issue(request: QAFixIssueRequest):
-    """Fix a single quality issue by generating and applying a prompt improvement.
+@router.post("/qa-fix-issue", status_code=202)
+async def fix_single_issue(
+    request: QAFixIssueRequest,
+    background_tasks: BackgroundTasks,
+):
+    """Start a fix for a single quality issue (async background task).
 
-    Triggered from the admin panel via the backend proxy.
-    Reads the issue (including admin insight), generates an improved prompt,
-    and commits it to GitHub.
+    Returns 202 Accepted immediately. The fix runs in the background.
+    Progress is tracked via fix_status column in quality_issues table.
+    The admin panel polls the issue detail endpoint to check status.
     """
-    try:
-        reviewer = QABatchReviewer()
-        result = await reviewer.fix_single_issue(issue_id=request.issue_id)
-        return result
+    pool = await get_pool()
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(
-            "Fix single issue failed",
-            issue_id=request.issue_id,
-            error=str(e),
-            traceback=traceback.format_exc(),
-        )
-        raise HTTPException(status_code=500, detail=str(e))
+    # Validate issue exists and has an agent
+    row = await pool.fetchrow(
+        "SELECT id, agent_name, fix_status FROM quality_issues WHERE id = $1",
+        request.issue_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Quality issue not found")
+    if not row["agent_name"]:
+        raise HTTPException(status_code=400, detail="Issue has no associated agent")
+    if row["fix_status"] == "in_progress":
+        raise HTTPException(status_code=409, detail="Fix already in progress")
+
+    # Mark as in_progress immediately (before background task starts)
+    await pool.execute(
+        "UPDATE quality_issues SET fix_status = 'in_progress', fix_error = NULL WHERE id = $1",
+        request.issue_id,
+    )
+
+    reviewer = QABatchReviewer()
+    background_tasks.add_task(reviewer.fix_single_issue, request.issue_id)
+
+    return {
+        "status": "accepted",
+        "issue_id": request.issue_id,
+        "message": "Fix started. Poll the issue detail endpoint for status updates.",
+    }
 
 
 # =====================================================

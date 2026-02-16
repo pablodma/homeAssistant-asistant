@@ -24,6 +24,8 @@ logger = structlog.get_logger()
 
 
 # System prompt for Step 2: Generating improved prompts
+# Uses XML output format instead of JSON to avoid malformed JSON issues
+# when the improved_prompt contains thousands of chars with quotes/newlines.
 PROMPT_IMPROVER_SYSTEM = """Sos un experto en prompt engineering para agentes de IA conversacional.
 
 Tu tarea es mejorar un prompt de agente basándote en propuestas de mejora específicas derivadas de un análisis de calidad.
@@ -36,23 +38,28 @@ Reglas estrictas:
 5. Si una propuesta de mejora no se puede implementar solo con cambios al prompt (ej: requiere cambios de código), ignorala y mencionalo
 6. Preservá todas las instrucciones existentes que no estén relacionadas con los problemas
 
-Respondé SOLO con un JSON válido (sin markdown):
-{
-  "should_modify": true/false,
-  "improved_prompt": "...el prompt completo con los cambios aplicados...",
-  "changes_summary": [
-    {
-      "section": "nombre de la sección modificada",
-      "change": "descripción del cambio realizado",
-      "reason": "qué problema resuelve"
-    }
-  ],
-  "skipped_proposals": ["descripción de propuestas que no se pudieron implementar en el prompt"],
-  "confidence": 0.0-1.0
-}
+Respondé SOLO con XML (sin markdown, sin texto fuera de los tags):
 
-Si no hay cambios necesarios en el prompt (ej: todos los problemas son técnicos), respondé:
-{"should_modify": false, "improved_prompt": null, "changes_summary": [], "skipped_proposals": ["..."], "confidence": 1.0}"""
+<result>
+<should_modify>true</should_modify>
+<improved_prompt>
+...el prompt completo con los cambios aplicados...
+</improved_prompt>
+<changes>
+<change section="nombre de la sección" change="descripción del cambio" reason="qué problema resuelve"/>
+</changes>
+<skipped_proposals>descripción de propuestas no implementadas (o vacío)</skipped_proposals>
+<confidence>0.8</confidence>
+</result>
+
+Si no hay cambios necesarios en el prompt (ej: todos los problemas son técnicos):
+<result>
+<should_modify>false</should_modify>
+<improved_prompt></improved_prompt>
+<changes></changes>
+<skipped_proposals>razón</skipped_proposals>
+<confidence>1.0</confidence>
+</result>"""
 
 
 class QABatchReviewer:
@@ -339,9 +346,6 @@ class QABatchReviewer:
 
     async def _run_analysis(self, filled_prompt: str) -> str:
         """Run Step 1: Claude analyzes issues using the QA Reviewer prompt."""
-        # #region agent log
-        import json as _json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a").write(_json.dumps({"location":"qa_reviewer.py:_run_analysis","message":"Starting analysis","data":{"model":self.settings.qa_review_model},"timestamp":__import__("time").time(),"hypothesisId":"A","runId":"fix1"})+"\n")
-        # #endregion
         async with self.client.messages.stream(
             model=self.settings.qa_review_model,
             max_tokens=8000,
@@ -350,9 +354,6 @@ class QABatchReviewer:
             ],
         ) as stream:
             response = await stream.get_final_message()
-        # #region agent log
-        open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a").write(_json.dumps({"location":"qa_reviewer.py:_run_analysis","message":"Analysis complete","data":{"stop_reason":response.stop_reason,"content_len":len(response.content[0].text)},"timestamp":__import__("time").time(),"hypothesisId":"A","runId":"fix1"})+"\n")
-        # #endregion
         return response.content[0].text
 
     def _parse_xml_response(self, response: str) -> dict[str, Any]:
@@ -385,6 +386,58 @@ class QABatchReviewer:
                 sections[tag] = match.group(1).strip()
 
         return sections
+
+    def _parse_improvement_xml(self, content: str) -> Optional[dict[str, Any]]:
+        """Parse Claude's XML improvement response into structured data.
+
+        More robust than JSON for long prompt content that contains
+        quotes, newlines, and special characters.
+        """
+        try:
+            # Extract should_modify
+            should_modify_match = re.search(
+                r"<should_modify>(.*?)</should_modify>", content, re.DOTALL
+            )
+            if not should_modify_match:
+                return None
+
+            should_modify = should_modify_match.group(1).strip().lower() == "true"
+
+            # Extract improved_prompt (can be very long)
+            prompt_match = re.search(
+                r"<improved_prompt>\s*(.*?)\s*</improved_prompt>", content, re.DOTALL
+            )
+            improved_prompt = prompt_match.group(1).strip() if prompt_match else ""
+
+            # Extract changes
+            changes_summary = []
+            change_matches = re.finditer(
+                r'<change\s+section="([^"]*?)"\s+change="([^"]*?)"\s+reason="([^"]*?)"\s*/?>',
+                content,
+                re.DOTALL,
+            )
+            for m in change_matches:
+                changes_summary.append({
+                    "section": m.group(1),
+                    "change": m.group(2),
+                    "reason": m.group(3),
+                })
+
+            # Extract confidence
+            confidence_match = re.search(
+                r"<confidence>(.*?)</confidence>", content, re.DOTALL
+            )
+            confidence = float(confidence_match.group(1).strip()) if confidence_match else 0.5
+
+            return {
+                "should_modify": should_modify,
+                "improved_prompt": improved_prompt if should_modify else None,
+                "changes_summary": changes_summary,
+                "confidence": confidence,
+            }
+        except Exception as e:
+            logger.error("XML parsing error", error=str(e))
+            return None
 
     async def _process_improvements(
         self,
@@ -548,9 +601,6 @@ class QABatchReviewer:
         # Call Claude for improvement
         # max_tokens=16000 to avoid truncation: the improved_prompt field contains
         # the full agent prompt which can be thousands of tokens when JSON-encoded.
-        # #region agent log
-        import json as _json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a").write(_json.dumps({"location":"qa_reviewer.py:_improve_agent_prompt","message":"Starting improvement","data":{"agent":agent_name,"model":self.settings.qa_review_model},"timestamp":__import__("time").time(),"hypothesisId":"A","runId":"fix1"})+"\n")
-        # #endregion
         async with self.client.messages.stream(
             model=self.settings.qa_review_model,
             max_tokens=16000,
@@ -563,9 +613,6 @@ class QABatchReviewer:
             response = await stream.get_final_message()
 
         content = response.content[0].text
-        # #region agent log
-        open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a").write(_json.dumps({"location":"qa_reviewer.py:_improve_agent_prompt","message":"Improvement complete","data":{"agent":agent_name,"stop_reason":response.stop_reason,"content_len":len(content)},"timestamp":__import__("time").time(),"hypothesisId":"A","runId":"fix1"})+"\n")
-        # #endregion
 
         # Check if response was truncated (stop_reason == "max_tokens")
         if response.stop_reason == "max_tokens":
@@ -576,22 +623,13 @@ class QABatchReviewer:
             )
             return None
 
-        # Clean markdown if present
-        if content.startswith("```"):
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-            content = content.strip()
-
-        try:
-            result = json.loads(content)
-        except json.JSONDecodeError as e:
+        # Parse XML response
+        result = self._parse_improvement_xml(content)
+        if result is None:
             logger.error(
-                "Failed to parse improvement response",
-                error=str(e),
-                content=content[:300],
+                "Failed to parse improvement XML response",
+                content=content[:500],
                 content_length=len(content),
-                stop_reason=response.stop_reason,
             )
             return None
 
@@ -697,80 +735,78 @@ class QABatchReviewer:
     # SINGLE ISSUE FIX (triggered from admin panel)
     # =====================================================
 
-    async def fix_single_issue(self, issue_id: str) -> dict[str, Any]:
-        """Generate and apply a prompt fix for a single quality issue.
+    async def fix_single_issue(self, issue_id: str) -> None:
+        """Generate and apply a prompt fix for a single quality issue (background).
 
         Reads the issue (including admin_insight), generates an improved
         prompt via Claude, and commits it to GitHub.
+        Updates fix_status in quality_issues as it progresses.
 
         Args:
             issue_id: UUID of the quality issue to fix.
-
-        Returns:
-            Revision result with commit info.
-
-        Raises:
-            ValueError: If issue not found, no agent, or fix cannot be applied.
         """
-        # #region agent log
-        import json as _json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a").write(_json.dumps({"location":"qa_reviewer.py:fix_single_issue","message":"Fix started","data":{"issue_id":issue_id},"timestamp":__import__("time").time(),"hypothesisId":"A","runId":"fix1"})+"\n")
-        # #endregion
         pool = await get_pool()
 
-        # Fetch the issue
-        row = await pool.fetchrow(
-            """
-            SELECT id, tenant_id, issue_type, issue_category, severity,
-                   agent_name, tool_name, message_in, message_out,
-                   error_message, qa_analysis, qa_suggestion, qa_confidence,
-                   admin_insight, created_at
-            FROM quality_issues
-            WHERE id = $1
-            """,
-            issue_id,
-        )
-
-        if not row:
-            raise ValueError(f"Quality issue {issue_id} not found")
-
-        issue = dict(row)
-        agent_name = issue.get("agent_name")
-        tenant_id = str(issue["tenant_id"])
-
-        if not agent_name:
-            raise ValueError(
-                "Cannot apply fix: issue has no associated agent name"
-            )
-
-        # Build a proposal text from the QA analysis + admin insight
-        proposal_parts = []
-        if issue.get("qa_analysis"):
-            proposal_parts.append(f"Análisis QA: {issue['qa_analysis']}")
-        if issue.get("qa_suggestion"):
-            proposal_parts.append(f"Sugerencia QA: {issue['qa_suggestion']}")
-        if issue.get("admin_insight"):
-            proposal_parts.append(f"Insight del admin: {issue['admin_insight']}")
-        if issue.get("error_message"):
-            proposal_parts.append(f"Error: {issue['error_message']}")
-
-        proposals = "\n".join(proposal_parts) if proposal_parts else issue["error_message"]
-
-        # Create a review cycle to track this fix
-        now = datetime.now(timezone.utc)
-        cycle_id = await pool.fetchval(
-            """
-            INSERT INTO qa_review_cycles (
-                tenant_id, triggered_by, period_start, period_end, status
-            )
-            VALUES ($1, 'admin-fix', $2, $3, 'running')
-            RETURNING id
-            """,
-            tenant_id,
-            now,
-            now,
-        )
-
         try:
+            # Mark as in_progress
+            await pool.execute(
+                "UPDATE quality_issues SET fix_status = 'in_progress', fix_error = NULL WHERE id = $1",
+                issue_id,
+            )
+
+            # Fetch the issue
+            row = await pool.fetchrow(
+                """
+                SELECT id, tenant_id, issue_type, issue_category, severity,
+                       agent_name, tool_name, message_in, message_out,
+                       error_message, qa_analysis, qa_suggestion, qa_confidence,
+                       admin_insight, created_at
+                FROM quality_issues
+                WHERE id = $1
+                """,
+                issue_id,
+            )
+
+            if not row:
+                await self._fail_fix(pool, issue_id, f"Quality issue {issue_id} not found")
+                return
+
+            issue = dict(row)
+            agent_name = issue.get("agent_name")
+            tenant_id = str(issue["tenant_id"])
+
+            if not agent_name:
+                await self._fail_fix(pool, issue_id, "Issue has no associated agent name")
+                return
+
+            # Build a proposal text from the QA analysis + admin insight
+            proposal_parts = []
+            if issue.get("qa_analysis"):
+                proposal_parts.append(f"Análisis QA: {issue['qa_analysis']}")
+            if issue.get("qa_suggestion"):
+                proposal_parts.append(f"Sugerencia QA: {issue['qa_suggestion']}")
+            if issue.get("admin_insight"):
+                proposal_parts.append(f"Insight del admin: {issue['admin_insight']}")
+            if issue.get("error_message"):
+                proposal_parts.append(f"Error: {issue['error_message']}")
+
+            proposals = "\n".join(proposal_parts) if proposal_parts else issue.get("error_message", "")
+
+            # Create a review cycle to track this fix
+            now = datetime.now(timezone.utc)
+            cycle_id = await pool.fetchval(
+                """
+                INSERT INTO qa_review_cycles (
+                    tenant_id, triggered_by, period_start, period_end, status
+                )
+                VALUES ($1, 'admin-fix', $2, $3, 'running')
+                RETURNING id
+                """,
+                tenant_id,
+                now,
+                now,
+            )
+
             revision = await self._improve_agent_prompt(
                 tenant_id=tenant_id,
                 cycle_id=str(cycle_id),
@@ -785,39 +821,52 @@ class QABatchReviewer:
                     cycle_id, 1, 0,
                     {"message": "Claude determined no prompt change needed"},
                 )
-                raise ValueError(
-                    "No se pudo generar un fix. Claude determinó que no hay "
-                    "cambios necesarios en el prompt para este issue."
+                await self._fail_fix(
+                    pool, issue_id,
+                    "Claude determinó que no hay cambios necesarios en el prompt.",
                 )
+                return
 
             await self._complete_cycle(cycle_id, 1, 1, {"fix_applied": True})
 
-            # Mark issue as resolved
+            # Mark issue as completed with result
             await pool.execute(
                 """
                 UPDATE quality_issues
-                SET is_resolved = true,
+                SET fix_status = 'completed',
+                    fix_error = NULL,
+                    fix_result = $2,
+                    is_resolved = true,
                     resolved_at = NOW(),
                     resolved_by = 'admin-fix',
-                    resolution_notes = $2
+                    resolution_notes = $3
                 WHERE id = $1
                 """,
                 issue_id,
-                f"Fix aplicado automáticamente. Revision: {revision['revision_id']}",
+                json.dumps(revision),
+                f"Fix aplicado. Revision: {revision['revision_id']}",
             )
 
-            return revision
+            logger.info(
+                "Single issue fix completed",
+                issue_id=issue_id,
+                revision_id=revision.get("revision_id"),
+            )
 
-        except ValueError:
-            raise
         except Exception as e:
-            await pool.execute(
-                """
-                UPDATE qa_review_cycles
-                SET status = 'failed', error_message = $1, completed_at = NOW()
-                WHERE id = $2
-                """,
-                str(e),
-                cycle_id,
-            )
-            raise
+            logger.error("Single issue fix failed", issue_id=issue_id, error=str(e))
+            await self._fail_fix(pool, issue_id, str(e))
+
+    async def _fail_fix(
+        self, pool: Any, issue_id: str, error_message: str
+    ) -> None:
+        """Mark a fix as failed in the database."""
+        await pool.execute(
+            """
+            UPDATE quality_issues
+            SET fix_status = 'failed', fix_error = $2
+            WHERE id = $1
+            """,
+            issue_id,
+            error_message,
+        )
