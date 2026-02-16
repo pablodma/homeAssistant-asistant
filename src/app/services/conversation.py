@@ -31,6 +31,8 @@ class ConversationService:
 
     # Prefix for onboarding sessions (users without tenant_id)
     ONBOARDING_PREFIX = "onboarding"
+    # Sentinel UUID for onboarding sessions (chat_sessions.tenant_id is UUID NOT NULL)
+    ONBOARDING_TENANT_UUID = "00000000-0000-0000-0000-000000000000"
 
     def __init__(self):
         self.repo = MemoryRepository()
@@ -52,7 +54,7 @@ class ConversationService:
     ) -> dict:
         """Get or create a conversation session."""
         session_key = self._session_key(phone, tenant_id)
-        effective_tenant = tenant_id or self.ONBOARDING_PREFIX
+        effective_tenant = tenant_id or self.ONBOARDING_TENANT_UUID
 
         session = await self.repo.get_session(session_key)
         if session:

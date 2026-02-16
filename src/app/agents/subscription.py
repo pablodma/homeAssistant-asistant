@@ -460,6 +460,11 @@ class SubscriptionAgent(BaseAgent):
             return {"success": True, "data": response.json()}
         return {"success": False, "error": f"Error fetching plans: {response.status_code}"}
 
+    @staticmethod
+    def _normalize_phone(phone: str) -> str:
+        """Ensure phone has + prefix for E.164 format."""
+        return phone if phone.startswith("+") else f"+{phone}"
+
     async def _register_starter(
         self,
         client: httpx.AsyncClient,
@@ -473,7 +478,7 @@ class SubscriptionAgent(BaseAgent):
             f"{base_url}/api/v1/onboarding/whatsapp",
             headers=headers,
             json={
-                "phone": phone,
+                "phone": self._normalize_phone(phone),
                 "display_name": args["display_name"],
                 "home_name": args["home_name"],
                 "plan": "starter",
@@ -500,7 +505,7 @@ class SubscriptionAgent(BaseAgent):
             f"{base_url}/api/v1/onboarding/whatsapp/pending",
             headers=headers,
             json={
-                "phone": phone,
+                "phone": self._normalize_phone(phone),
                 "display_name": args["display_name"],
                 "home_name": args["home_name"],
                 "plan_type": args["plan_type"],

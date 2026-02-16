@@ -334,13 +334,18 @@ async def _handle_unregistered_user(
     Invokes the SubscriptionAgent in acquisition mode (no tenant_id).
     Manages conversation memory keyed by phone number.
     Logs interaction for admin visibility.
+    Runs QA analysis so errors are visible in the admin panel.
     """
+    # Sentinel UUID for quality issues (quality_issues.tenant_id is NOT NULL)
+    ONBOARDING_TENANT_UUID = "00000000-0000-0000-0000-000000000000"
+
     try:
         import time
 
         start_time = time.time()
         conversation_service = ConversationService()
         interaction_logger = InteractionLogger()
+        quality_logger = get_quality_logger()
 
         # Get or create onboarding session (no tenant_id)
         await conversation_service.get_or_create(
@@ -384,7 +389,9 @@ async def _handle_unregistered_user(
 
         # Log interaction for admin panel visibility
         response_time_ms = int((time.time() - start_time) * 1000)
-        await interaction_logger.log(
+        interaction_metadata = result.metadata or {}
+        interaction_metadata["mode"] = "acquisition"
+        interaction_id = await interaction_logger.log(
             tenant_id=None,  # No tenant in acquisition mode
             user_phone=message.phone,
             user_name=message.contact_name,
@@ -394,7 +401,7 @@ async def _handle_unregistered_user(
             tokens_in=result.tokens_in,
             tokens_out=result.tokens_out,
             response_time_ms=response_time_ms,
-            metadata={"mode": "acquisition"},
+            metadata=interaction_metadata,
         )
 
         logger.info(
@@ -404,12 +411,40 @@ async def _handle_unregistered_user(
             response_time_ms=response_time_ms,
         )
 
+        # Run QA analysis (fire and forget) — uses sentinel tenant UUID
+        if interaction_id:
+            asyncio.create_task(
+                _run_qa_analysis(
+                    interaction_id=interaction_id,
+                    tenant_id=ONBOARDING_TENANT_UUID,
+                    user_phone=message.phone,
+                    message_in=message.text,
+                    message_out=result.response,
+                    agent_name=result.sub_agent_used or result.agent_used,
+                    metadata=interaction_metadata,
+                )
+            )
+
     except Exception as e:
         logger.error(
             "Error handling unregistered user",
             phone=message.phone,
             error=str(e),
         )
+
+        # Log hard error with sentinel tenant UUID for admin visibility
+        quality_logger = get_quality_logger()
+        await quality_logger.log_hard_error(
+            tenant_id=ONBOARDING_TENANT_UUID,
+            category="agent_error",
+            error_message=str(e),
+            user_phone=message.phone,
+            agent_name="subscription",
+            message_in=message.text,
+            severity="high",
+            exception=e,
+        )
+
         try:
             await whatsapp.send_text(
                 message.phone,
