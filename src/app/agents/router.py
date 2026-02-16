@@ -220,17 +220,25 @@ class RouterAgent(BaseAgent):
             tokens_in = response.usage.prompt_tokens if response.usage else None
             tokens_out = response.usage.completion_tokens if response.usage else None
 
-            # Check if LLM wants to use a tool
+            # Check if LLM wants to use tools
             if choice.message.tool_calls:
-                tool_call = choice.message.tool_calls[0]
-                agent_name = tool_call.function.name.replace("_agent", "")
+                import json
 
-                logger.info(f"LLM routing to {agent_name}")
+                results: list[AgentResult] = []
+                agents_used: list[str] = []
+                total_tokens_in = tokens_in or 0
+                total_tokens_out = tokens_out or 0
 
-                sub_agent = self._get_sub_agent(agent_name)
-                if sub_agent:
+                for tool_call in choice.message.tool_calls:
+                    agent_name = tool_call.function.name.replace("_agent", "")
+                    logger.info(f"LLM routing to {agent_name}")
+
+                    sub_agent = self._get_sub_agent(agent_name)
+                    if not sub_agent:
+                        logger.warning(f"Unknown sub-agent: {agent_name}")
+                        continue
+
                     try:
-                        import json
                         args = json.loads(tool_call.function.arguments)
                         user_request = args.get("user_request", message)
 
@@ -240,13 +248,29 @@ class RouterAgent(BaseAgent):
                             tenant_id=tenant_id,
                             history=history,
                         )
-                        result.agent_used = self.name
-                        result.sub_agent_used = agent_name
-                        result.tokens_in = (result.tokens_in or 0) + (tokens_in or 0)
-                        result.tokens_out = (result.tokens_out or 0) + (tokens_out or 0)
-                        return result
+                        results.append(result)
+                        agents_used.append(agent_name)
+                        total_tokens_in += result.tokens_in or 0
+                        total_tokens_out += result.tokens_out or 0
                     except Exception as e:
                         logger.error(f"Sub-agent {agent_name} failed", error=str(e))
+
+                if results:
+                    combined_response = "\n\n".join(r.response for r in results)
+                    # Merge metadata from all results
+                    merged_metadata: dict = {}
+                    for r in results:
+                        if r.metadata:
+                            merged_metadata.update(r.metadata)
+
+                    return AgentResult(
+                        response=combined_response,
+                        agent_used=self.name,
+                        sub_agent_used=", ".join(agents_used),
+                        tokens_in=total_tokens_in,
+                        tokens_out=total_tokens_out,
+                        metadata=merged_metadata or None,
+                    )
 
             # Direct response from router
             response_text = choice.message.content or "No pude procesar tu mensaje."
