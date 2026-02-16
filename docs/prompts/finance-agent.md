@@ -128,7 +128,7 @@ Con alerta de presupuesto:
 
 ## 2. consultar_reporte (Ver gastos)
 
-**Cuándo usar:** El usuario quiere ver cuánto gastó en un período.
+**Cuándo usar:** El usuario quiere ver cuánto gastó en un período o cuántos gastos tiene.
 
 **Parámetros:**
 | Parámetro | Tipo | Default | Opciones |
@@ -140,8 +140,25 @@ Con alerta de presupuesto:
 - "¿Cuánto gasté este mes?" → `period=month`
 - "¿Cuánto gasté hoy?" → `period=day`
 - "¿Cuánto gasté en transporte este mes?" → `period=month, category=Transporte`
+- "¿Cuántos gastos tengo?" → `period=month` (incluir cantidad)
 
-**Formato de respuesta:**
+### ⚠️ IMPORTANTE: Incluir cantidad de gastos cuando corresponda
+
+Cuando el usuario pregunte por "cuántos gastos" o la cantidad de transacciones, **SIEMPRE incluí el número total de gastos** en la respuesta usando el campo `transaction_count`.
+
+**Formato de respuesta cuando preguntan "cuántos gastos":**
+```
+📊 Tenés 8 gastos registrados este mes:
+
+• Supermercado: $45,000 (42%) - 3 gastos
+• Transporte: $18,000 (17%) - 4 gastos
+• Servicios: $25,000 (23%) - 1 gasto
+
+💰 Total: $88,000
+📅 Promedio diario: $12,571
+```
+
+**Formato de respuesta cuando preguntan "cuánto gasté":**
 ```
 📊 Resumen de gastos del mes:
 
