@@ -16,6 +16,7 @@ from ..services.conversation import ConversationService
 from ..services.interaction_log import InteractionLogger
 from ..services.quality_logger import get_quality_logger
 from ..services.phone_resolver import get_phone_resolver
+from ..services.transcription import get_transcription_service
 from .client import get_whatsapp_client
 from .types import IncomingMessage, WhatsAppWebhookPayload
 
@@ -93,6 +94,15 @@ async def receive_webhook(
                             incoming = IncomingMessage.from_webhook(message, contact)
                             background_tasks.add_task(process_message, incoming)
 
+                        # Handle audio/voice messages
+                        elif message.type == "audio" and message.audio:
+                            contact = None
+                            if change.value.contacts:
+                                contact = change.value.contacts[0]
+
+                            incoming = IncomingMessage.from_webhook(message, contact)
+                            background_tasks.add_task(process_message, incoming)
+
                         # Handle interactive responses (list/button selections)
                         elif message.type == "interactive" and message.interactive:
                             contact = None
@@ -129,12 +139,51 @@ async def process_message(message: IncomingMessage) -> None:
     logger.info(
         "Processing message",
         phone=message.phone,
-        text=message.text[:50] + "..." if len(message.text) > 50 else message.text,
+        is_audio=message.is_audio,
+        text=message.text[:50] + "..." if message.text and len(message.text) > 50 else message.text,
     )
 
     try:
         # Mark message as read and show typing indicator
         await whatsapp.mark_as_read_and_typing(message.message_id)
+
+        # Transcribe audio messages before processing
+        if message.is_audio and message.audio_media_id:
+            try:
+                audio_bytes, content_type = await whatsapp.download_media(
+                    message.audio_media_id
+                )
+                transcription_service = get_transcription_service()
+                transcribed_text = await transcription_service.transcribe(
+                    audio_bytes, content_type
+                )
+
+                if not transcribed_text:
+                    await whatsapp.send_text(
+                        message.phone,
+                        "No pude entender el audio. ¿Podrías repetirlo o enviarlo como texto? 🎙️",
+                    )
+                    return
+
+                # Replace empty text with transcription
+                message = message.model_copy(update={"text": transcribed_text})
+                logger.info(
+                    "Audio transcribed for processing",
+                    phone=message.phone,
+                    transcribed_text=transcribed_text[:80],
+                )
+
+            except Exception as e:
+                logger.error(
+                    "Audio processing failed",
+                    phone=message.phone,
+                    error=str(e),
+                )
+                await whatsapp.send_text(
+                    message.phone,
+                    "No pude procesar tu audio. Por favor, intentá de nuevo o enviá un mensaje de texto. 🎙️",
+                )
+                return
 
         # Resolve tenant by phone number
         phone_resolver = get_phone_resolver()
@@ -208,6 +257,9 @@ async def process_message(message: IncomingMessage) -> None:
 
         # Log interaction and get ID for QA
         response_time_ms = int((time.time() - start_time) * 1000)
+        interaction_metadata = result.metadata or {}
+        if message.is_audio:
+            interaction_metadata["input_type"] = "audio"
         interaction_id = await interaction_logger.log(
             tenant_id=tenant_id,
             user_phone=message.phone,
@@ -219,7 +271,7 @@ async def process_message(message: IncomingMessage) -> None:
             tokens_in=result.tokens_in,
             tokens_out=result.tokens_out,
             response_time_ms=response_time_ms,
-            metadata=result.metadata,
+            metadata=interaction_metadata,
         )
 
         logger.info(

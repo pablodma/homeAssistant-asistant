@@ -24,6 +24,13 @@ class WhatsAppTextMessage(BaseModel):
     body: str
 
 
+class WhatsAppAudioMessage(BaseModel):
+    """WhatsApp audio message content."""
+
+    id: str
+    mime_type: str
+
+
 class WhatsAppInteractiveListReply(BaseModel):
     """Interactive list reply content."""
 
@@ -55,6 +62,7 @@ class WhatsAppMessage(BaseModel):
     timestamp: str
     type: Literal["text", "image", "audio", "video", "document", "location", "contacts", "button", "interactive"]
     text: Optional[WhatsAppTextMessage] = None
+    audio: Optional[WhatsAppAudioMessage] = None
     interactive: Optional[WhatsAppInteractiveResponse] = None
 
     class Config:
@@ -110,6 +118,8 @@ class IncomingMessage(BaseModel):
     text: str
     timestamp: datetime
     contact_name: Optional[str] = None
+    is_audio: bool = False
+    audio_media_id: Optional[str] = None
     is_interactive: bool = False
     interactive_type: Optional[str] = None  # "list_reply" or "button_reply"
     interactive_id: Optional[str] = None  # ID of the selected item
@@ -136,6 +146,18 @@ class IncomingMessage(BaseModel):
                 text=message.text.body,
                 timestamp=datetime.fromtimestamp(int(message.timestamp)),
                 contact_name=contact_name,
+            )
+
+        # Handle audio/voice messages
+        if message.type == "audio" and message.audio:
+            return cls(
+                message_id=message.id,
+                phone=phone,
+                text="",  # Will be replaced with transcription in webhook
+                timestamp=datetime.fromtimestamp(int(message.timestamp)),
+                contact_name=contact_name,
+                is_audio=True,
+                audio_media_id=message.audio.id,
             )
 
         # Handle interactive responses (list or button selections)

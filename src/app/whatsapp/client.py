@@ -213,6 +213,75 @@ class WhatsAppClient:
             )
             return False
 
+    async def download_media(self, media_id: str) -> tuple[bytes, str]:
+        """Download media from WhatsApp Cloud API.
+
+        Two-step process:
+        1. GET /{media_id} to obtain the download URL
+        2. GET {url} to download the actual bytes
+
+        Args:
+            media_id: The WhatsApp media ID.
+
+        Returns:
+            Tuple of (audio_bytes, content_type).
+
+        Raises:
+            RuntimeError: If download fails at any step.
+        """
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+        }
+
+        async with httpx.AsyncClient() as client:
+            # Step 1: Get media URL
+            media_url = f"{WHATSAPP_API_URL}/{media_id}"
+            response = await client.get(
+                media_url,
+                headers=headers,
+                timeout=15.0,
+            )
+
+            if response.status_code != 200:
+                logger.error(
+                    "Failed to get media URL",
+                    media_id=media_id,
+                    status_code=response.status_code,
+                    response=response.text,
+                )
+                raise RuntimeError(f"Failed to get media URL: {response.status_code}")
+
+            media_info = response.json()
+            download_url = media_info.get("url")
+            content_type = media_info.get("mime_type", "audio/ogg")
+
+            if not download_url:
+                raise RuntimeError("No download URL in media response")
+
+            # Step 2: Download actual bytes
+            response = await client.get(
+                download_url,
+                headers=headers,
+                timeout=60.0,
+            )
+
+            if response.status_code != 200:
+                logger.error(
+                    "Failed to download media",
+                    media_id=media_id,
+                    status_code=response.status_code,
+                )
+                raise RuntimeError(f"Failed to download media: {response.status_code}")
+
+            logger.info(
+                "Media downloaded",
+                media_id=media_id,
+                content_type=content_type,
+                size_bytes=len(response.content),
+            )
+
+            return response.content, content_type
+
     async def mark_as_read(self, message_id: str) -> bool:
         """Mark a message as read.
 
