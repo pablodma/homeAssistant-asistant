@@ -66,6 +66,12 @@ class QAReviewAllRequest(BaseModel):
     )
 
 
+class QAFixIssueRequest(BaseModel):
+    """Request body for fixing a single quality issue."""
+
+    issue_id: str = Field(..., description="UUID of the quality issue to fix")
+
+
 class QAReviewResponse(BaseModel):
     """Response for a triggered QA review."""
 
@@ -210,6 +216,36 @@ async def trigger_qa_review_all(
     except Exception as e:
         logger.error(
             "Failed to start QA review for all tenants",
+            error=str(e),
+            traceback=traceback.format_exc(),
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =====================================================
+# SINGLE ISSUE FIX
+# =====================================================
+
+
+@router.post("/qa-fix-issue")
+async def fix_single_issue(request: QAFixIssueRequest):
+    """Fix a single quality issue by generating and applying a prompt improvement.
+
+    Triggered from the admin panel via the backend proxy.
+    Reads the issue (including admin insight), generates an improved prompt,
+    and commits it to GitHub.
+    """
+    try:
+        reviewer = QABatchReviewer()
+        result = await reviewer.fix_single_issue(issue_id=request.issue_id)
+        return result
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(
+            "Fix single issue failed",
+            issue_id=request.issue_id,
             error=str(e),
             traceback=traceback.format_exc(),
         )

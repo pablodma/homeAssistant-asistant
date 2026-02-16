@@ -147,7 +147,7 @@ class QABatchReviewer:
 
             # Step 4: Generate and apply prompt improvements
             revisions = []
-            proposals = parsed_analysis.get("improvement_proposals", "")
+            proposals = parsed_analysis.get("automated_fixes", "")
 
             if proposals:
                 revisions = await self._process_improvements(
@@ -213,7 +213,7 @@ class QABatchReviewer:
             SELECT id, issue_type, issue_category, severity, agent_name, tool_name,
                    user_phone, message_in, message_out, error_code, error_message,
                    qa_analysis, qa_suggestion, qa_confidence,
-                   stack_trace, correlation_id, created_at
+                   admin_insight, stack_trace, correlation_id, created_at
             FROM quality_issues
             WHERE tenant_id = $1
               AND is_resolved = false
@@ -243,8 +243,10 @@ class QABatchReviewer:
                 f"QA Analysis: {issue.get('qa_analysis', 'N/A')}\n"
                 f"QA Suggestion: {issue.get('qa_suggestion', 'N/A')}\n"
                 f"Confidence: {issue.get('qa_confidence', 'N/A')}\n"
-                f"Time: {issue['created_at']}\n"
             )
+            if issue.get("admin_insight"):
+                entry += f"Admin Insight: {issue['admin_insight']}\n"
+            entry += f"Time: {issue['created_at']}\n"
             entries.append(entry)
 
         return "\n".join(entries)
@@ -677,3 +679,129 @@ class QABatchReviewer:
             json.dumps(analysis_result, default=str),
             cycle_id,
         )
+
+    # =====================================================
+    # SINGLE ISSUE FIX (triggered from admin panel)
+    # =====================================================
+
+    async def fix_single_issue(self, issue_id: str) -> dict[str, Any]:
+        """Generate and apply a prompt fix for a single quality issue.
+
+        Reads the issue (including admin_insight), generates an improved
+        prompt via Claude, and commits it to GitHub.
+
+        Args:
+            issue_id: UUID of the quality issue to fix.
+
+        Returns:
+            Revision result with commit info.
+
+        Raises:
+            ValueError: If issue not found, no agent, or fix cannot be applied.
+        """
+        pool = await get_pool()
+
+        # Fetch the issue
+        row = await pool.fetchrow(
+            """
+            SELECT id, tenant_id, issue_type, issue_category, severity,
+                   agent_name, tool_name, message_in, message_out,
+                   error_message, qa_analysis, qa_suggestion, qa_confidence,
+                   admin_insight, created_at
+            FROM quality_issues
+            WHERE id = $1
+            """,
+            issue_id,
+        )
+
+        if not row:
+            raise ValueError(f"Quality issue {issue_id} not found")
+
+        issue = dict(row)
+        agent_name = issue.get("agent_name")
+        tenant_id = str(issue["tenant_id"])
+
+        if not agent_name:
+            raise ValueError(
+                "Cannot apply fix: issue has no associated agent name"
+            )
+
+        # Build a proposal text from the QA analysis + admin insight
+        proposal_parts = []
+        if issue.get("qa_analysis"):
+            proposal_parts.append(f"Análisis QA: {issue['qa_analysis']}")
+        if issue.get("qa_suggestion"):
+            proposal_parts.append(f"Sugerencia QA: {issue['qa_suggestion']}")
+        if issue.get("admin_insight"):
+            proposal_parts.append(f"Insight del admin: {issue['admin_insight']}")
+        if issue.get("error_message"):
+            proposal_parts.append(f"Error: {issue['error_message']}")
+
+        proposals = "\n".join(proposal_parts) if proposal_parts else issue["error_message"]
+
+        # Create a review cycle to track this fix
+        now = datetime.now(timezone.utc)
+        cycle_id = await pool.fetchval(
+            """
+            INSERT INTO qa_review_cycles (
+                tenant_id, triggered_by, period_start, period_end, status
+            )
+            VALUES ($1, 'admin-fix', $2, $3, 'running')
+            RETURNING id
+            """,
+            tenant_id,
+            now,
+            now,
+        )
+
+        try:
+            revision = await self._improve_agent_prompt(
+                tenant_id=tenant_id,
+                cycle_id=str(cycle_id),
+                agent_name=agent_name,
+                agent_issues=[issue],
+                proposals=proposals,
+                triggered_by="admin-fix",
+            )
+
+            if not revision:
+                await self._complete_cycle(
+                    cycle_id, 1, 0,
+                    {"message": "Claude determined no prompt change needed"},
+                )
+                raise ValueError(
+                    "No se pudo generar un fix. Claude determinó que no hay "
+                    "cambios necesarios en el prompt para este issue."
+                )
+
+            await self._complete_cycle(cycle_id, 1, 1, {"fix_applied": True})
+
+            # Mark issue as resolved
+            await pool.execute(
+                """
+                UPDATE quality_issues
+                SET is_resolved = true,
+                    resolved_at = NOW(),
+                    resolved_by = 'admin-fix',
+                    resolution_notes = $2
+                WHERE id = $1
+                """,
+                issue_id,
+                f"Fix aplicado automáticamente. Revision: {revision['revision_id']}",
+            )
+
+            return revision
+
+        except ValueError:
+            raise
+        except Exception as e:
+            await pool.execute(
+                """
+                UPDATE qa_review_cycles
+                SET status = 'failed', error_message = $1, completed_at = NOW()
+                WHERE id = $2
+                """,
+                str(e),
+                cycle_id,
+            )
+            raise
