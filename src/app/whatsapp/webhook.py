@@ -333,9 +333,14 @@ async def _handle_unregistered_user(
 
     Invokes the SubscriptionAgent in acquisition mode (no tenant_id).
     Manages conversation memory keyed by phone number.
+    Logs interaction for admin visibility.
     """
     try:
+        import time
+
+        start_time = time.time()
         conversation_service = ConversationService()
+        interaction_logger = InteractionLogger()
 
         # Get or create onboarding session (no tenant_id)
         await conversation_service.get_or_create(
@@ -377,10 +382,26 @@ async def _handle_unregistered_user(
             content=result.response,
         )
 
+        # Log interaction for admin panel visibility
+        response_time_ms = int((time.time() - start_time) * 1000)
+        await interaction_logger.log(
+            tenant_id=None,  # No tenant in acquisition mode
+            user_phone=message.phone,
+            user_name=message.contact_name,
+            message_in=message.text,
+            message_out=result.response,
+            agent_used=result.agent_used,
+            tokens_in=result.tokens_in,
+            tokens_out=result.tokens_out,
+            response_time_ms=response_time_ms,
+            metadata={"mode": "acquisition"},
+        )
+
         logger.info(
             "Unregistered user message processed",
             phone=message.phone,
             agent_used=result.agent_used,
+            response_time_ms=response_time_ms,
         )
 
     except Exception as e:

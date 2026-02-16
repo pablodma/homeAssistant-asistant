@@ -14,7 +14,7 @@ class InteractionLogger:
 
     async def log(
         self,
-        tenant_id: str,
+        tenant_id: Optional[str],
         user_phone: str,
         message_in: str,
         message_out: str,
@@ -29,7 +29,7 @@ class InteractionLogger:
         """Log an interaction to the database.
 
         Args:
-            tenant_id: The tenant ID.
+            tenant_id: The tenant ID. None for acquisition-mode (unregistered users).
             user_phone: User's phone number.
             message_in: The user's message.
             message_out: The bot's response.
@@ -46,6 +46,9 @@ class InteractionLogger:
         """
         try:
             pool = await get_pool()
+
+            # Convert empty string tenant_id to None (DB expects UUID or NULL)
+            effective_tenant_id = tenant_id if tenant_id else None
 
             query = """
                 INSERT INTO agent_interactions (
@@ -69,7 +72,7 @@ class InteractionLogger:
 
             result = await pool.fetchval(
                 query,
-                tenant_id,
+                effective_tenant_id,
                 user_phone,
                 user_name,
                 message_in,
