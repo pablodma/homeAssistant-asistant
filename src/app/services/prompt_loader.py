@@ -32,6 +32,7 @@ PROMPT_FILES = {
     "reminder": "reminder-agent.md",
     "shopping": "shopping-agent.md",
     "vehicle": "vehicle-agent.md",
+    "subscription": "subscription-agent.md",
     "router": "router-agent.md",
     "qa": "qa-agent.md",
     "qa-reviewer": "qa-reviewer-agent.md",

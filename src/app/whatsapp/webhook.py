@@ -11,6 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, Query, Request, Response
 
 from ..config import get_settings
 from ..agents.router import RouterAgent
+from ..agents.subscription import SubscriptionAgent
 from ..agents.qa import QAAgent
 from ..services.conversation import ConversationService
 from ..services.interaction_log import InteractionLogger
@@ -190,13 +191,9 @@ async def process_message(message: IncomingMessage) -> None:
         phone_info = await phone_resolver.resolve(message.phone)
 
         if not phone_info:
-            # Phone not registered - send registration message
-            logger.info("unregistered_phone", phone=message.phone)
-            await whatsapp.send_text(
-                message.phone,
-                "¡Hola! 👋 Para usar HomeAI necesitás registrar tu número primero.\n\n"
-                "Visitá https://home-assistant-frontend-brown.vercel.app para crear tu cuenta y vincular tu WhatsApp.",
-            )
+            # Phone not registered - invoke SubscriptionAgent for onboarding
+            logger.info("unregistered_phone_onboarding", phone=message.phone)
+            await _handle_unregistered_user(message, whatsapp)
             return
 
         tenant_id = phone_info.tenant_id
@@ -326,6 +323,78 @@ async def process_message(message: IncomingMessage) -> None:
             )
         except Exception:
             logger.error("Failed to send error message to user")
+
+
+async def _handle_unregistered_user(
+    message: IncomingMessage,
+    whatsapp,
+) -> None:
+    """Handle messages from unregistered users via SubscriptionAgent.
+
+    Invokes the SubscriptionAgent in acquisition mode (no tenant_id).
+    Manages conversation memory keyed by phone number.
+    """
+    try:
+        conversation_service = ConversationService()
+
+        # Get or create onboarding session (no tenant_id)
+        await conversation_service.get_or_create(
+            phone=message.phone,
+            tenant_id="",
+        )
+
+        # Load conversation history for onboarding
+        history = await conversation_service.get_history(
+            phone=message.phone,
+            tenant_id="",
+            limit=10,
+        )
+
+        # Process through SubscriptionAgent in acquisition mode
+        subscription_agent = SubscriptionAgent()
+        result = await subscription_agent.process(
+            message=message.text,
+            phone=message.phone,
+            tenant_id="",  # Empty = acquisition mode
+            history=history,
+        )
+
+        # Send response
+        await whatsapp.send_text(message.phone, result.response)
+
+        # Save conversation history
+        await conversation_service.add_message(
+            phone=message.phone,
+            tenant_id="",
+            role="user",
+            content=message.text,
+        )
+        await conversation_service.add_message(
+            phone=message.phone,
+            tenant_id="",
+            role="assistant",
+            content=result.response,
+        )
+
+        logger.info(
+            "Unregistered user message processed",
+            phone=message.phone,
+            agent_used=result.agent_used,
+        )
+
+    except Exception as e:
+        logger.error(
+            "Error handling unregistered user",
+            phone=message.phone,
+            error=str(e),
+        )
+        try:
+            await whatsapp.send_text(
+                message.phone,
+                "Hubo un problema. Por favor, intentá de nuevo en unos segundos.",
+            )
+        except Exception:
+            logger.error("Failed to send error message to unregistered user")
 
 
 async def _run_qa_analysis(
