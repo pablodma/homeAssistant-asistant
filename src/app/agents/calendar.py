@@ -246,10 +246,19 @@ class CalendarAgent(BaseAgent):
         async with httpx.AsyncClient() as client:
             try:
                 if tool_name == "crear_evento":
-                    args["user_phone"] = phone
+                    payload = {
+                        "title": args["title"],
+                        "event_date": args.get("date"),
+                        "start_time": args.get("time"),
+                        "duration_minutes": args.get("duration_minutes", 60),
+                        "location": args.get("location"),
+                        "description": args.get("description"),
+                        "user_phone": phone,
+                    }
+                    payload = {k: v for k, v in payload.items() if v is not None}
                     response = await client.post(
                         f"{base_url}/agent/calendar/event",
-                        json=args,
+                        json=payload,
                         headers=headers,
                         timeout=30.0,
                     )
@@ -263,16 +272,30 @@ class CalendarAgent(BaseAgent):
                         timeout=30.0,
                     )
                 elif tool_name == "modificar_evento":
+                    payload = {"search_query": args.get("search_query")}
+                    if args.get("title"):
+                        payload["title"] = args["title"]
+                    if args.get("date"):
+                        payload["event_date"] = args["date"]
+                    if args.get("time"):
+                        payload["start_time"] = args["time"]
+                    if args.get("location"):
+                        payload["location"] = args["location"]
                     response = await client.put(
                         f"{base_url}/agent/calendar/event/search",
-                        json=args,
+                        json=payload,
+                        params={"user_phone": phone},
                         headers=headers,
                         timeout=30.0,
                     )
                 elif tool_name == "eliminar_evento":
+                    payload = {"search_query": args.get("search_query")}
+                    if args.get("date"):
+                        payload["event_date"] = args["date"]
                     response = await client.delete(
                         f"{base_url}/agent/calendar/event/search",
-                        params=args,
+                        json=payload,
+                        params={"user_phone": phone},
                         headers=headers,
                         timeout=30.0,
                     )
@@ -301,8 +324,10 @@ class CalendarAgent(BaseAgent):
                 else:
                     return {"success": False, "error": f"Unknown tool: {tool_name}"}
 
-                if response.status_code == 200:
+                if response.status_code in (200, 201):
                     return {"success": True, "data": response.json()}
+                elif response.status_code == 204:
+                    return {"success": True, "data": {}}
                 else:
                     return {
                         "success": False,
@@ -313,6 +338,44 @@ class CalendarAgent(BaseAgent):
             except Exception as e:
                 logger.error(f"Tool execution failed: {tool_name}", error=str(e))
                 return {"success": False, "error": str(e)}
+
+    def _parse_event_datetime(self, event: dict[str, Any]) -> tuple[str, str]:
+        """Extract date and time from an event's start_datetime field.
+
+        Args:
+            event: Event dict from backend API.
+
+        Returns:
+            Tuple of (date_str YYYY-MM-DD, time_str HH:MM).
+        """
+        start_dt = event.get("start_datetime", "")
+        if not start_dt:
+            return ("", "")
+        try:
+            if isinstance(start_dt, str):
+                dt = datetime.fromisoformat(start_dt.replace("Z", "+00:00"))
+            else:
+                dt = start_dt
+            return (dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M"))
+        except Exception:
+            return (str(start_dt)[:10], "")
+
+    def _format_event_line(self, event: dict[str, Any]) -> str:
+        """Format a single event as a display line.
+
+        Args:
+            event: Event dict from backend API.
+
+        Returns:
+            Formatted event line.
+        """
+        title = event.get("title", "")
+        _, time_str = self._parse_event_datetime(event)
+        location = event.get("location", "")
+        line = f"• {time_str} - {title}" if time_str else f"• {title}"
+        if location:
+            line += f"\n  📍 {location}"
+        return line
 
     async def _generate_response(
         self,
@@ -339,15 +402,26 @@ class CalendarAgent(BaseAgent):
         data = result.get("data", {})
 
         if tool_name == "crear_evento":
-            title = args.get("title", "")
-            date = args.get("date", "")
-            time = args.get("time", "09:00")
-            location = args.get("location", "")
+            event = data.get("event") or {}
+            created = data.get("created", True)
 
-            response = f"📅 Evento creado:\n\"{title}\"\n📆 {self._format_date(date)} a las {time}"
+            if not created and data.get("duplicate_warning"):
+                warning = data["duplicate_warning"]
+                return f"⚠️ {warning.get('message', 'Ya existe un evento similar.')}"
+
+            title = event.get("title") or args.get("title", "")
+            date_str, time_str = self._parse_event_datetime(event)
+            if not date_str:
+                date_str = args.get("date", "")
+            if not time_str:
+                time_str = args.get("time", "09:00")
+            location = event.get("location") or args.get("location", "")
+            duration = args.get("duration_minutes", 60)
+
+            response = f"📅 Evento creado:\n\"{title}\"\n📆 {self._format_date(date_str)} a las {time_str}"
             if location:
                 response += f"\n📍 {location}"
-            response += "\n⏱️ Duración: 1 hora"
+            response += f"\n⏱️ Duración: {duration} min"
             return response
 
         elif tool_name == "listar_eventos":
@@ -357,50 +431,67 @@ class CalendarAgent(BaseAgent):
 
             response = "📅 Tus eventos:\n\n"
             for event in events[:10]:
-                title = event.get("title", "")
-                date = event.get("date", "")
-                time = event.get("time", "")
-                location = event.get("location", "")
-
-                response += f"• {time} - {title}\n"
-                if location:
-                    response += f"  📍 {location}\n"
+                response += self._format_event_line(event) + "\n"
 
             return response.strip()
 
         elif tool_name == "modificar_evento":
-            modified = data.get("modified", False)
-            if modified:
-                title = data.get("title", "")
-                changes = data.get("changes", [])
-                response = f"✏️ Evento modificado:\n\"{title}\"\n\nCambios:\n"
-                for change in changes:
-                    response += f"• {change}\n"
-                return response.strip()
+            success = data.get("success", False)
+            if success:
+                event = data.get("event", {})
+                title = event.get("title", "")
+                date_str, time_str = self._parse_event_datetime(event)
+                location = event.get("location", "")
+
+                response = f"✏️ Evento modificado:\n\"{title}\""
+                if date_str:
+                    response += f"\n📆 {self._format_date(date_str)}"
+                if time_str:
+                    response += f" a las {time_str}"
+                if location:
+                    response += f"\n📍 {location}"
+                return response
             else:
-                return "❌ No encontré el evento para modificar."
+                candidates = data.get("candidates", [])
+                if candidates:
+                    response = f"⚠️ {data.get('message', 'Encontré varios eventos:')}\n\n"
+                    for event in candidates[:5]:
+                        response += self._format_event_line(event) + "\n"
+                    return response.strip()
+                return f"❌ {data.get('message', 'No encontré el evento para modificar.')}"
 
         elif tool_name == "eliminar_evento":
-            deleted = data.get("deleted", False)
-            if deleted:
-                title = data.get("title", "")
+            success = data.get("success", False)
+            if success:
+                event = data.get("event", {})
+                title = event.get("title", "")
                 return f"✅ Evento cancelado:\n\"{title}\""
             else:
-                return "❌ No encontré el evento para eliminar."
+                candidates = data.get("candidates", [])
+                if candidates:
+                    response = f"⚠️ {data.get('message', 'Encontré varios eventos:')}\n\n"
+                    for event in candidates[:5]:
+                        response += self._format_event_line(event) + "\n"
+                    return response.strip()
+                return f"❌ {data.get('message', 'No encontré el evento para eliminar.')}"
 
         elif tool_name == "verificar_disponibilidad":
             available = data.get("available", False)
             if available:
-                date = args.get("date", "")
-                time = args.get("time", "")
-                return f"✅ Tenés libre el {self._format_date(date)} a las {time}."
+                date_str = args.get("date", "")
+                time_str = args.get("time", "")
+                return f"✅ Tenés libre el {self._format_date(date_str)} a las {time_str}."
             else:
-                conflict = data.get("conflict", {})
-                suggestions = data.get("suggestions", [])
-                response = f"⚠️ A esa hora tenés:\n\"{conflict.get('title', '')}\"\n\n"
-                if suggestions:
-                    response += "Horarios sugeridos:\n"
-                    for s in suggestions[:3]:
+                conflicts = data.get("conflicts", [])
+                suggested_times = data.get("suggested_times", [])
+                response = "⚠️ A esa hora tenés:\n"
+                for conflict in conflicts[:3]:
+                    title = conflict.get("title", "")
+                    _, c_time = self._parse_event_datetime(conflict)
+                    response += f"• \"{title}\" a las {c_time}\n"
+                if suggested_times:
+                    response += "\nHorarios sugeridos:\n"
+                    for s in suggested_times[:3]:
                         response += f"• {s}\n"
                 return response.strip()
 
@@ -413,14 +504,16 @@ class CalendarAgent(BaseAgent):
                 return f"📅 Para sincronizar tus eventos con Google Calendar, conectá tu cuenta:\n\n👉 {auth_url}\n\nTocá el link, autorizá con tu cuenta de Google y listo."
 
         elif tool_name == "proximo_evento":
-            event = data.get("event")
-            if event:
-                title = event.get("title", "")
-                date = event.get("date", "")
-                time = event.get("time", "")
-                location = event.get("location", "")
+            if data:
+                title = data.get("title", "")
+                date_str, time_str = self._parse_event_datetime(data)
+                location = data.get("location", "")
 
-                response = f"📅 Tu próximo evento:\n\"{title}\"\n📆 {self._format_date(date)} a las {time}"
+                response = f"📅 Tu próximo evento:\n\"{title}\""
+                if date_str:
+                    response += f"\n📆 {self._format_date(date_str)}"
+                if time_str:
+                    response += f" a las {time_str}"
                 if location:
                     response += f"\n📍 {location}"
                 return response
