@@ -38,14 +38,10 @@ ACQUISITION_TOOLS = [
         "type": "function",
         "function": {
             "name": "register_starter",
-            "description": "Registra un usuario nuevo con plan Starter (gratuito). Crea tenant + usuario al instante.",
+            "description": "Registra un usuario nuevo con plan Starter (gratuito). Crea tenant + usuario al instante. El teléfono se obtiene automáticamente.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "phone": {
-                        "type": "string",
-                        "description": "Teléfono del usuario en formato E.164",
-                    },
                     "display_name": {
                         "type": "string",
                         "description": "Nombre del usuario",
@@ -55,7 +51,7 @@ ACQUISITION_TOOLS = [
                         "description": "Nombre del hogar",
                     },
                 },
-                "required": ["phone", "display_name", "home_name"],
+                "required": ["display_name", "home_name"],
             },
         },
     },
@@ -63,14 +59,10 @@ ACQUISITION_TOOLS = [
         "type": "function",
         "function": {
             "name": "create_checkout",
-            "description": "Genera un link de pago de Lemon Squeezy para un plan pago (family o premium)",
+            "description": "Genera un link de pago de Lemon Squeezy para un plan pago (family o premium). El teléfono se obtiene automáticamente.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "phone": {
-                        "type": "string",
-                        "description": "Teléfono del usuario",
-                    },
                     "display_name": {
                         "type": "string",
                         "description": "Nombre del usuario",
@@ -89,7 +81,7 @@ ACQUISITION_TOOLS = [
                         "description": "Código de cupón (opcional)",
                     },
                 },
-                "required": ["phone", "display_name", "home_name", "plan_type"],
+                "required": ["display_name", "home_name", "plan_type"],
             },
         },
     },
@@ -395,10 +387,10 @@ class SubscriptionAgent(BaseAgent):
                     return await self._get_plans(client, base_url)
 
                 elif tool_name == "register_starter":
-                    return await self._register_starter(client, base_url, headers, args)
+                    return await self._register_starter(client, base_url, headers, args, phone)
 
                 elif tool_name == "create_checkout":
-                    return await self._create_checkout(client, base_url, headers, args)
+                    return await self._create_checkout(client, base_url, headers, args, phone)
 
                 elif tool_name == "validate_coupon":
                     return await self._validate_coupon(client, base_url, args)
@@ -448,13 +440,14 @@ class SubscriptionAgent(BaseAgent):
         base_url: str,
         headers: dict[str, str],
         args: dict[str, Any],
+        phone: str,
     ) -> dict[str, Any]:
         """Register a new user with Starter plan via WhatsApp onboarding."""
         response = await client.post(
             f"{base_url}/api/v1/onboarding/whatsapp",
             headers=headers,
             json={
-                "phone": args["phone"],
+                "phone": phone,
                 "display_name": args["display_name"],
                 "home_name": args["home_name"],
                 "plan": "starter",
@@ -473,6 +466,7 @@ class SubscriptionAgent(BaseAgent):
         base_url: str,
         headers: dict[str, str],
         args: dict[str, Any],
+        phone: str,
     ) -> dict[str, Any]:
         """Create a pending registration and generate LS checkout link."""
         # First, save pending registration
@@ -480,7 +474,7 @@ class SubscriptionAgent(BaseAgent):
             f"{base_url}/api/v1/onboarding/whatsapp/pending",
             headers=headers,
             json={
-                "phone": args["phone"],
+                "phone": phone,
                 "display_name": args["display_name"],
                 "home_name": args["home_name"],
                 "plan_type": args["plan_type"],
