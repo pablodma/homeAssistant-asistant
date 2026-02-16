@@ -20,7 +20,7 @@ class QualityLogger:
 
     async def log_hard_error(
         self,
-        tenant_id: str,
+        tenant_id: Optional[str],
         category: str,
         error_message: str,
         interaction_id: Optional[str] = None,
@@ -94,7 +94,7 @@ class QualityLogger:
 
     async def log_soft_error(
         self,
-        tenant_id: str,
+        tenant_id: Optional[str],
         interaction_id: str,
         category: str,
         qa_analysis: str,
@@ -166,7 +166,7 @@ class QualityLogger:
 
     async def _persist_issue(
         self,
-        tenant_id: str,
+        tenant_id: Optional[str],
         issue_type: str,
         issue_category: str,
         error_message: str,

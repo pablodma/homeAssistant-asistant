@@ -83,7 +83,7 @@ Si no hay problema, respondé: {{"has_issue": false, "category": null, "explanat
         message_in: str,
         message_out: str,
         agent_name: str,
-        tenant_id: str,
+        tenant_id: str | None,
         tool_name: Optional[str] = None,
         tool_result: Optional[dict[str, Any]] = None,
     ) -> QAAnalysisResult:

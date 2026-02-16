@@ -336,9 +336,6 @@ async def _handle_unregistered_user(
     Logs interaction for admin visibility.
     Runs QA analysis so errors are visible in the admin panel.
     """
-    # Sentinel UUID for quality issues (quality_issues.tenant_id is NOT NULL)
-    ONBOARDING_TENANT_UUID = "00000000-0000-0000-0000-000000000000"
-
     try:
         import time
 
@@ -411,12 +408,12 @@ async def _handle_unregistered_user(
             response_time_ms=response_time_ms,
         )
 
-        # Run QA analysis (fire and forget) — uses sentinel tenant UUID
+        # Run QA analysis (fire and forget) — None tenant for onboarding
         if interaction_id:
             asyncio.create_task(
                 _run_qa_analysis(
                     interaction_id=interaction_id,
-                    tenant_id=ONBOARDING_TENANT_UUID,
+                    tenant_id=None,
                     user_phone=message.phone,
                     message_in=message.text,
                     message_out=result.response,
@@ -432,10 +429,10 @@ async def _handle_unregistered_user(
             error=str(e),
         )
 
-        # Log hard error with sentinel tenant UUID for admin visibility
+        # Log hard error for admin visibility (None tenant = onboarding)
         quality_logger = get_quality_logger()
         await quality_logger.log_hard_error(
-            tenant_id=ONBOARDING_TENANT_UUID,
+            tenant_id=None,
             category="agent_error",
             error_message=str(e),
             user_phone=message.phone,
@@ -456,7 +453,7 @@ async def _handle_unregistered_user(
 
 async def _run_qa_analysis(
     interaction_id: str,
-    tenant_id: str,
+    tenant_id: str | None,
     user_phone: str,
     message_in: str,
     message_out: str,
