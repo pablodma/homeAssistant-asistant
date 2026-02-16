@@ -60,13 +60,16 @@ Cuando habla de mantenimiento, services, vencimientos o datos del auto.
 - "Actualizá el kilometraje a 30000" → actualizar datos
 
 ### subscription_agent
-Cuando pregunta por su plan, suscripción, funcionalidades disponibles, quiere cambiar de plan o cancelar.
+Cuando pregunta por su plan, suscripción, funcionalidades disponibles, quiere cambiar de plan, cancelar, o invitar/agregar miembros al hogar.
 - "¿Qué plan tengo?" → consultar plan
 - "¿Qué puedo hacer?" → funcionalidades del plan
 - "Quiero más funcionalidades" → upgrade
 - "Quiero cancelar" → cancelar suscripción
 - "¿Cuántos mensajes me quedan?" → consultar uso
 - "Quiero bajar de plan" → downgrade
+- "Quiero agregar a mi esposa" → invitar miembro
+- "Sumale este número al hogar" → invitar miembro
+- "Invitá a +5491155234628" → invitar miembro
 
 ## Diferenciaciones clave
 
@@ -107,4 +110,6 @@ Cuando pregunta por su plan, suscripción, funcionalidades disponibles, quiere c
 "¿Qué plan tengo?" → subscription_agent
 "Quiero cancelar mi suscripción" → subscription_agent
 "¿Cuántos mensajes me quedan?" → subscription_agent
+"Quiero agregar a mi esposa" → subscription_agent
+"Sumale +5491155234628 al hogar" → subscription_agent
 ```

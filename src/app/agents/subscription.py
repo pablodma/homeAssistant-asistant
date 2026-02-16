@@ -183,6 +183,23 @@ MANAGEMENT_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "invite_member",
+            "description": "Invita a un miembro al hogar. Solo necesita el número de WhatsApp. El nombre se toma automáticamente cuando el invitado escriba.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "phone": {
+                        "type": "string",
+                        "description": "Número de WhatsApp del invitado en formato +549...",
+                    },
+                },
+                "required": ["phone"],
+            },
+        },
+    },
 ]
 
 
@@ -222,10 +239,12 @@ class SubscriptionAgent(BaseAgent):
         """
         is_registered = bool(tenant_id)
         mode = "management" if is_registered else "acquisition"
+        contact_name = kwargs.get("contact_name")
         logger.info(
             "Subscription agent processing",
             mode=mode,
             phone=phone,
+            contact_name=contact_name,
             message=message[:50],
         )
 
@@ -241,6 +260,8 @@ class SubscriptionAgent(BaseAgent):
             f"- Modo: {'Gestión (usuario registrado)' if is_registered else 'Adquisición (usuario nuevo)'}\n"
             f"- Teléfono del usuario: {phone}\n"
         )
+        if contact_name:
+            mode_context += f"- Nombre de perfil WhatsApp: {contact_name}\n"
         if is_registered:
             mode_context += f"- Tenant ID: {tenant_id}\n"
 
@@ -410,6 +431,11 @@ class SubscriptionAgent(BaseAgent):
 
                 elif tool_name == "cancel_subscription":
                     return await self._cancel_subscription(
+                        client, base_url, headers, tenant_id, args
+                    )
+
+                elif tool_name == "invite_member":
+                    return await self._invite_member(
                         client, base_url, headers, tenant_id, args
                     )
 
@@ -610,3 +636,24 @@ class SubscriptionAgent(BaseAgent):
         if response.status_code == 200:
             return {"success": True, "data": response.json()}
         return {"success": False, "error": "Error al cancelar suscripción"}
+
+    async def _invite_member(
+        self,
+        client: httpx.AsyncClient,
+        base_url: str,
+        headers: dict[str, str],
+        tenant_id: str,
+        args: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Invite a member to the tenant's household."""
+        response = await client.post(
+            f"{base_url}/api/v1/tenants/{tenant_id}/members/bot",
+            headers=headers,
+            json={
+                "phone": args["phone"],
+            },
+        )
+        if response.status_code in (200, 201):
+            return {"success": True, "data": response.json()}
+        error_detail = response.json().get("detail", "Error al invitar miembro")
+        return {"success": False, "error": error_detail}

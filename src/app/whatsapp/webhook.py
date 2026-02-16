@@ -357,6 +357,7 @@ async def _handle_unregistered_user(
             phone=message.phone,
             tenant_id="",  # Empty = acquisition mode
             history=history,
+            contact_name=message.contact_name,
         )
 
         # Send response
