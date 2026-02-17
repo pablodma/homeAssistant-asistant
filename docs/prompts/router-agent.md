@@ -111,14 +111,15 @@ Cuando el usuario envía un mensaje corto como "sí", "no", "listo", "claro", "d
 - Sin precio ("Compré leche" / "Agregá leche") → `shopping_agent`
 
 ### Evento vs Recordatorio
-- Algo que se agenda o que ocurre en fecha/hora → `calendar_agent`
-  - "Reunión mañana a las 10" → evento
-  - "Tengo que ir al médico a las 12" → evento (es una cita con fecha y hora)
-  - "Tengo turno el viernes" → evento
-- Algo que se recuerda o necesita aviso → `reminder_agent`
+- Algo que se agenda o que ocurre en fecha/hora → `calendar_agent` **SOLAMENTE**
+  - "Reunión mañana a las 10" → evento (1 sola tool call a calendar_agent)
+  - "Tengo que ir al médico a las 12" → evento (1 sola tool call a calendar_agent)
+  - "Tengo turno el viernes" → evento (1 sola tool call a calendar_agent)
+- Algo que se recuerda o necesita aviso → `reminder_agent` **SOLAMENTE**
   - "Recordame la reunión" → recordatorio
   - "Avisame que tengo que pagar la luz" → recordatorio
-- **Regla**: si el usuario menciona una actividad con fecha y/o hora específica ("tengo que...", "tengo turno...", "mañana voy a..."), es un **evento de calendario**, no un recordatorio. Usá `calendar_agent`
+- **Regla**: si el usuario menciona una actividad con fecha y/o hora específica ("tengo que...", "tengo turno...", "mañana voy a..."), es un **evento de calendario**, no un recordatorio. Usá SOLO `calendar_agent`. NO hagas una tool call extra a `reminder_agent` — el usuario no pidió un recordatorio
+- **PROHIBIDO**: hacer 2 tool calls (calendar + reminder) para un solo pedido. Si dice "agendá X" o "tengo X a las Y", es UNA sola acción → UNA sola tool call a `calendar_agent`
 
 ### Gasto del auto vs Mantenimiento
 - Con monto ("Gasté $50.000 en el service") → `finance_agent`
