@@ -29,9 +29,10 @@ class Settings(BaseSettings):
     whatsapp_verify_token: str
     whatsapp_access_token: str
 
-    # OpenAI (used by router, finance, calendar, etc.)
+    # OpenAI
     openai_api_key: str
-    openai_model: str = "gpt-5-mini"
+    openai_model: str = "gpt-4.1-mini"  # Sub-agents (finance, calendar, etc.)
+    openai_router_model: str = "gpt-4.1-nano"  # Router agent (fast classification)
     whisper_model: str = "whisper-1"
 
     # Anthropic (used by QA and Prompt Improver agents)

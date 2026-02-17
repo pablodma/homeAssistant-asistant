@@ -228,10 +228,11 @@ class RouterAgent(BaseAgent):
 
         try:
             response = await self.client.chat.completions.create(
-                model=self.settings.openai_model,
+                model=self.settings.openai_router_model,
                 messages=messages,
                 tools=tools,
                 tool_choice="auto",
+                temperature=0.3,
                 max_completion_tokens=1000,
             )
 

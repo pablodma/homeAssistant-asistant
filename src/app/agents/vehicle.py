@@ -190,6 +190,7 @@ class VehicleAgent(BaseAgent):
                 messages=messages,
                 tools=tools,
                 tool_choice="auto",
+                temperature=0.4,
                 max_completion_tokens=1000,
             )
 

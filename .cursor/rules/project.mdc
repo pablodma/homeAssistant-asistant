@@ -9,7 +9,7 @@ globs:
 ## Proyecto
 - **Nombre**: HomeAI Assistant Bot
 - **Repositorio**: git@github.com:pablodma/homeAssistant-asistant.git
-- **Stack**: FastAPI + OpenAI (gpt-5-mini) + LangChain + asyncpg
+- **Stack**: FastAPI + OpenAI (gpt-4.1-mini + gpt-4.1-nano) + Anthropic Claude (QA) + LangChain + asyncpg
 - **Deploy**: Railway (https://homeai-assis-production.up.railway.app)
 - **Fase actual**: 2 (MVP - Código propio, migrado de N8N)
 
@@ -116,12 +116,12 @@ homeai-assis/
 
 ### Router Agent (Orquestador)
 - **Función**: Decide qué sub-agente debe manejar cada mensaje
-- **Método**: LLM-only con tool calling (gpt-5-mini) - Ver ADR-002
+- **Método**: LLM-only con tool calling (gpt-4.1-nano) - Ver ADR-002
 - **Prompt**: `docs/prompts/router-agent.md`
 
 ### QA Agent (Control de Calidad)
 - **Función**: Analiza cada interacción para detectar problemas de calidad
-- **Método**: LLM (gpt-4o-mini) analiza mensaje_in + mensaje_out + tool_result
+- **Método**: Anthropic Claude analiza mensaje_in + mensaje_out + tool_result
 - **Ejecución**: Asíncrona (no agrega latencia a la respuesta del usuario)
 - **Prompt**: `docs/prompts/qa-agent.md`
 
