@@ -36,8 +36,11 @@ Cuando menciona montos de dinero, gastos, pagos o presupuestos.
 - "Borrá el gasto del super" → eliminar gasto
 
 ### calendar_agent
-Cuando quiere agendar algo con fecha/hora, ver agenda o cancelar eventos.
+Cuando quiere agendar algo con fecha/hora, ver agenda, cancelar eventos, o **menciona que tiene una cita/actividad en una fecha y hora específica**.
 - "Agendá reunión mañana a las 10" → crear evento
+- "Mañana tengo que ir al médico a las 12" → crear evento (tiene actividad + fecha + hora)
+- "Tengo turno con el dentista el viernes a las 9" → crear evento
+- "El lunes tengo una reunión a las 3" → crear evento
 - "¿Qué tengo esta semana?" → listar eventos
 - "Cancelá la reunión del lunes" → eliminar evento
 
@@ -106,8 +109,14 @@ Cuando el usuario envía un mensaje corto como "sí", "no", "listo", "claro", "d
 - Sin precio ("Compré leche" / "Agregá leche") → `shopping_agent`
 
 ### Evento vs Recordatorio
-- Algo que se agenda ("Reunión mañana a las 10") → `calendar_agent`
-- Algo que se recuerda ("Recordame la reunión") → `reminder_agent`
+- Algo que se agenda o que ocurre en fecha/hora → `calendar_agent`
+  - "Reunión mañana a las 10" → evento
+  - "Tengo que ir al médico a las 12" → evento (es una cita con fecha y hora)
+  - "Tengo turno el viernes" → evento
+- Algo que se recuerda o necesita aviso → `reminder_agent`
+  - "Recordame la reunión" → recordatorio
+  - "Avisame que tengo que pagar la luz" → recordatorio
+- **Regla**: si el usuario menciona una actividad con fecha y/o hora específica ("tengo que...", "tengo turno...", "mañana voy a..."), es un **evento de calendario**, no un recordatorio. Usá `calendar_agent`
 
 ### Gasto del auto vs Mantenimiento
 - Con monto ("Gasté $50.000 en el service") → `finance_agent`
@@ -136,6 +145,8 @@ Cuando el usuario envía un mensaje corto como "sí", "no", "listo", "claro", "d
 "Agregá pan a la lista" → shopping_agent("Agregar pan a la lista de compras")
 "pan" → "¿Querés agregar pan a la lista de compras?" (pedir aclaración)
 "Recordame mañana llamar al banco" → reminder_agent
+"Mañana tengo que ir al médico a las 12" → calendar_agent("Agendar cita con el médico mañana a las 12")
+"Tengo turno con el dentista el viernes a las 9" → calendar_agent("Agendar turno con el dentista el viernes a las 9")
 "¿Cuándo vence la VTV?" → vehicle_agent
 "Agregá leche y huevos a la lista y avisame el viernes que compre carne" → shopping_agent (leche, huevos) + reminder_agent (viernes, comprar carne)
 "Gasté 5000 en nafta y 3000 en el super" → finance_agent("Gasté 5000 en nafta") + finance_agent("Gasté 3000 en el super") (2 tool calls separadas)
