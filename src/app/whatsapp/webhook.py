@@ -196,6 +196,18 @@ async def process_message(message: IncomingMessage) -> None:
             await _handle_unregistered_user(message, whatsapp)
             return
 
+        if not phone_info.onboarding_completed:
+            # Registered but setup incomplete (post-payment) - invoke SubscriptionAgent in setup mode
+            logger.info(
+                "setup_pending",
+                phone=message.phone,
+                tenant_id=phone_info.tenant_id,
+            )
+            # Invalidate cache so next call picks up completed onboarding
+            phone_resolver.invalidate_cache(message.phone)
+            await _handle_setup_user(message, phone_info, whatsapp)
+            return
+
         tenant_id = phone_info.tenant_id
         user_name = phone_info.user_name or message.contact_name
 
@@ -323,6 +335,132 @@ async def process_message(message: IncomingMessage) -> None:
             )
         except Exception:
             logger.error("Failed to send error message to user")
+
+
+async def _handle_setup_user(
+    message: IncomingMessage,
+    phone_info,
+    whatsapp,
+) -> None:
+    """Handle messages from registered users with pending setup (onboarding_completed=false).
+
+    Invokes the SubscriptionAgent in setup mode to collect home_name
+    and optionally invite members after payment.
+    """
+    try:
+        import time
+
+        start_time = time.time()
+        tenant_id = phone_info.tenant_id
+        conversation_service = ConversationService()
+        interaction_logger = InteractionLogger()
+
+        # Get or create session with real tenant_id
+        await conversation_service.get_or_create(
+            phone=message.phone,
+            tenant_id=tenant_id,
+        )
+
+        # Load conversation history
+        history = await conversation_service.get_history(
+            phone=message.phone,
+            tenant_id=tenant_id,
+            limit=10,
+        )
+
+        # Process through SubscriptionAgent in setup mode
+        subscription_agent = SubscriptionAgent()
+        result = await subscription_agent.process(
+            message=message.text,
+            phone=message.phone,
+            tenant_id=tenant_id,
+            history=history,
+            mode="setup",
+            contact_name=message.contact_name,
+        )
+
+        # Send response
+        await whatsapp.send_text(message.phone, result.response)
+
+        # Save conversation history
+        await conversation_service.add_message(
+            phone=message.phone,
+            tenant_id=tenant_id,
+            role="user",
+            content=message.text,
+        )
+        await conversation_service.add_message(
+            phone=message.phone,
+            tenant_id=tenant_id,
+            role="assistant",
+            content=result.response,
+        )
+
+        # Log interaction
+        response_time_ms = int((time.time() - start_time) * 1000)
+        interaction_metadata = result.metadata or {}
+        interaction_metadata["mode"] = "setup"
+        interaction_id = await interaction_logger.log(
+            tenant_id=tenant_id,
+            user_phone=message.phone,
+            user_name=phone_info.user_name or message.contact_name,
+            message_in=message.text,
+            message_out=result.response,
+            agent_used=result.agent_used,
+            tokens_in=result.tokens_in,
+            tokens_out=result.tokens_out,
+            response_time_ms=response_time_ms,
+            metadata=interaction_metadata,
+        )
+
+        logger.info(
+            "Setup user message processed",
+            phone=message.phone,
+            tenant_id=tenant_id,
+            agent_used=result.agent_used,
+            response_time_ms=response_time_ms,
+        )
+
+        # Run QA analysis
+        if interaction_id:
+            asyncio.create_task(
+                _run_qa_analysis(
+                    interaction_id=interaction_id,
+                    tenant_id=tenant_id,
+                    user_phone=message.phone,
+                    message_in=message.text,
+                    message_out=result.response,
+                    agent_name=result.sub_agent_used or result.agent_used,
+                    metadata=interaction_metadata,
+                )
+            )
+
+    except Exception as e:
+        logger.error(
+            "Error handling setup user",
+            phone=message.phone,
+            error=str(e),
+        )
+
+        quality_logger = get_quality_logger()
+        await quality_logger.log_hard_error(
+            tenant_id=phone_info.tenant_id,
+            category="agent_error",
+            error_message=str(e),
+            user_phone=message.phone,
+            agent_name="subscription",
+            message_in=message.text,
+            severity="high",
+            exception=e,
+        )
+
+        try:
+            await whatsapp.send_text(
+                message.phone,
+                "Hubo un problema. Por favor, intentá de nuevo en unos segundos.",
+            )
+        except Exception:
+            logger.error("Failed to send error message to setup user")
 
 
 async def _handle_unregistered_user(

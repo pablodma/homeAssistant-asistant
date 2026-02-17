@@ -18,6 +18,7 @@ class PhoneTenantInfo:
     tenant_id: str
     user_name: Optional[str] = None
     home_name: Optional[str] = None
+    onboarding_completed: bool = True
 
 
 class PhoneResolver:
@@ -111,6 +112,7 @@ class PhoneResolver:
                     tenant_id=data["tenant_id"],
                     user_name=data.get("user_name"),
                     home_name=data.get("home_name"),
+                    onboarding_completed=data.get("onboarding_completed", True),
                 )
                 
         except httpx.RequestError as e:

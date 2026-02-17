@@ -37,43 +37,18 @@ ACQUISITION_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "register_starter",
-            "description": "Registra un usuario nuevo con plan Starter (gratuito). Crea tenant + usuario al instante. El teléfono se obtiene automáticamente.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "display_name": {
-                        "type": "string",
-                        "description": "Nombre del usuario",
-                    },
-                    "home_name": {
-                        "type": "string",
-                        "description": "Nombre del hogar",
-                    },
-                },
-                "required": ["display_name", "home_name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "create_checkout",
-            "description": "Genera un link de pago de Lemon Squeezy para un plan pago (family o premium). El teléfono se obtiene automáticamente.",
+            "description": "Genera un link de pago de Lemon Squeezy para cualquier plan. El teléfono se obtiene automáticamente. NO pide home_name (se configura después del pago).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "display_name": {
                         "type": "string",
                         "description": "Nombre del usuario",
-                    },
-                    "home_name": {
-                        "type": "string",
-                        "description": "Nombre del hogar",
                     },
                     "plan_type": {
                         "type": "string",
-                        "enum": ["family", "premium"],
+                        "enum": ["starter", "family", "premium"],
                         "description": "Tipo de plan",
                     },
                     "coupon_code": {
@@ -81,7 +56,7 @@ ACQUISITION_TOOLS = [
                         "description": "Código de cupón (opcional)",
                     },
                 },
-                "required": ["display_name", "home_name", "plan_type"],
+                "required": ["display_name", "plan_type"],
             },
         },
     },
@@ -99,11 +74,49 @@ ACQUISITION_TOOLS = [
                     },
                     "plan_type": {
                         "type": "string",
-                        "enum": ["family", "premium"],
+                        "enum": ["starter", "family", "premium"],
                         "description": "Plan al que se aplicaría",
                     },
                 },
                 "required": ["coupon_code", "plan_type"],
+            },
+        },
+    },
+]
+
+# Tool definitions for post-payment setup (registered but onboarding_completed=false)
+SETUP_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "complete_setup",
+            "description": "Completa la configuración del hogar después del pago. Actualiza el nombre del hogar y marca el onboarding como completo.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "home_name": {
+                        "type": "string",
+                        "description": "Nombre del hogar (ej: Casa García, Mi Depto)",
+                    },
+                },
+                "required": ["home_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "invite_member",
+            "description": "Invita a un miembro al hogar. Solo necesita el número de WhatsApp. El nombre se toma automáticamente cuando el invitado escriba.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "phone": {
+                        "type": "string",
+                        "description": "Número de WhatsApp del invitado en formato +549...",
+                    },
+                },
+                "required": ["phone"],
             },
         },
     },
@@ -206,9 +219,10 @@ MANAGEMENT_TOOLS = [
 class SubscriptionAgent(BaseAgent):
     """Agent for onboarding and subscription management.
 
-    Operates in two modes:
-    - Acquisition: for unregistered users (no tenant_id)
-    - Management: for registered users (has tenant_id)
+    Operates in three modes:
+    - Acquisition: for unregistered users (no tenant_id) — pitch, plans, checkout
+    - Setup: for registered users with onboarding_completed=false — home config post-payment
+    - Management: for registered users with onboarding complete — status, upgrade, cancel
     """
 
     name = "subscription"
@@ -233,13 +247,22 @@ class SubscriptionAgent(BaseAgent):
             phone: The user's phone number.
             tenant_id: The tenant ID (empty string for unregistered users).
             history: Conversation history.
+            mode: Override mode — "acquisition", "setup", or "management".
+            contact_name: WhatsApp profile name if available.
 
         Returns:
             The agent's response.
         """
-        is_registered = bool(tenant_id)
-        mode = "management" if is_registered else "acquisition"
+        explicit_mode = kwargs.get("mode")
         contact_name = kwargs.get("contact_name")
+
+        if explicit_mode:
+            mode = explicit_mode
+        elif not tenant_id:
+            mode = "acquisition"
+        else:
+            mode = "management"
+
         logger.info(
             "Subscription agent processing",
             mode=mode,
@@ -255,20 +278,30 @@ class SubscriptionAgent(BaseAgent):
         prompt = await self.get_prompt(prompt_tenant_id)
 
         # Add mode context to system prompt
+        mode_labels = {
+            "acquisition": "Adquisición (usuario nuevo)",
+            "setup": "Setup (post-pago, configurar hogar)",
+            "management": "Gestión (usuario registrado)",
+        }
         mode_context = (
             f"\n\n## Contexto actual\n"
-            f"- Modo: {'Gestión (usuario registrado)' if is_registered else 'Adquisición (usuario nuevo)'}\n"
+            f"- Modo: {mode_labels.get(mode, mode)}\n"
             f"- Teléfono del usuario: {phone}\n"
         )
         if contact_name:
             mode_context += f"- Nombre de perfil WhatsApp: {contact_name}\n"
-        if is_registered:
+        if tenant_id:
             mode_context += f"- Tenant ID: {tenant_id}\n"
 
         full_prompt = prompt + mode_context
 
         # Select tools based on mode
-        tools = MANAGEMENT_TOOLS if is_registered else ACQUISITION_TOOLS
+        tools_map = {
+            "acquisition": ACQUISITION_TOOLS,
+            "setup": SETUP_TOOLS,
+            "management": MANAGEMENT_TOOLS,
+        }
+        tools = tools_map.get(mode, MANAGEMENT_TOOLS)
 
         # Build messages
         messages: list[dict[str, Any]] = [
@@ -407,14 +440,16 @@ class SubscriptionAgent(BaseAgent):
                 if tool_name == "get_plans":
                     return await self._get_plans(client, base_url)
 
-                elif tool_name == "register_starter":
-                    return await self._register_starter(client, base_url, headers, args, phone)
-
                 elif tool_name == "create_checkout":
                     return await self._create_checkout(client, base_url, headers, args, phone)
 
                 elif tool_name == "validate_coupon":
                     return await self._validate_coupon(client, base_url, args)
+
+                elif tool_name == "complete_setup":
+                    return await self._complete_setup(
+                        client, base_url, headers, tenant_id, args
+                    )
 
                 elif tool_name == "get_subscription_status":
                     return await self._get_subscription_status(
@@ -465,32 +500,6 @@ class SubscriptionAgent(BaseAgent):
         """Ensure phone has + prefix for E.164 format."""
         return phone if phone.startswith("+") else f"+{phone}"
 
-    async def _register_starter(
-        self,
-        client: httpx.AsyncClient,
-        base_url: str,
-        headers: dict[str, str],
-        args: dict[str, Any],
-        phone: str,
-    ) -> dict[str, Any]:
-        """Register a new user with Starter plan via WhatsApp onboarding."""
-        response = await client.post(
-            f"{base_url}/api/v1/onboarding/whatsapp",
-            headers=headers,
-            json={
-                "phone": self._normalize_phone(phone),
-                "display_name": args["display_name"],
-                "home_name": args["home_name"],
-                "plan": "starter",
-            },
-        )
-        if response.status_code in (200, 201):
-            return {"success": True, "data": response.json()}
-        return {
-            "success": False,
-            "error": response.json().get("detail", "Error al registrar"),
-        }
-
     async def _create_checkout(
         self,
         client: httpx.AsyncClient,
@@ -499,15 +508,17 @@ class SubscriptionAgent(BaseAgent):
         args: dict[str, Any],
         phone: str,
     ) -> dict[str, Any]:
-        """Create a pending registration and generate LS checkout link."""
-        # First, save pending registration
+        """Create a pending registration and generate LS checkout link.
+
+        All plans (including Starter) go through checkout. home_name is NOT
+        collected here — it's configured post-payment via complete_setup.
+        """
         pending_response = await client.post(
             f"{base_url}/api/v1/onboarding/whatsapp/pending",
             headers=headers,
             json={
                 "phone": self._normalize_phone(phone),
                 "display_name": args["display_name"],
-                "home_name": args["home_name"],
                 "plan_type": args["plan_type"],
                 "coupon_code": args.get("coupon_code"),
             },
@@ -554,6 +565,25 @@ class SubscriptionAgent(BaseAgent):
                 },
             }
         return {"success": False, "error": "Error al validar cupón"}
+
+    async def _complete_setup(
+        self,
+        client: httpx.AsyncClient,
+        base_url: str,
+        headers: dict[str, str],
+        tenant_id: str,
+        args: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Complete home setup after payment (set home_name, mark onboarding done)."""
+        response = await client.patch(
+            f"{base_url}/api/v1/tenants/{tenant_id}/setup",
+            headers=headers,
+            json={"home_name": args["home_name"]},
+        )
+        if response.status_code == 200:
+            return {"success": True, "data": response.json()}
+        error_detail = response.json().get("detail", "Error al configurar el hogar")
+        return {"success": False, "error": error_detail}
 
     async def _get_subscription_status(
         self,
