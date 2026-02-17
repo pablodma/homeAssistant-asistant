@@ -293,7 +293,8 @@ class CalendarAgent(BaseAgent):
                     payload = {"search_query": args.get("search_query")}
                     if args.get("date"):
                         payload["event_date"] = args["date"]
-                    response = await client.delete(
+                    response = await client.request(
+                        "DELETE",
                         f"{base_url}/agent/calendar/event/search",
                         json=payload,
                         params={"user_phone": phone},
