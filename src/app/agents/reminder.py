@@ -162,6 +162,25 @@ class ReminderAgent(BaseAgent):
                 agent_used=self.name,
             )
 
+    async def _resolve_user_id(self, pool, phone: str) -> str | None:
+        """Resolve user ID from phone number."""
+        normalized = phone.strip()
+        if not normalized.startswith("+"):
+            normalized = f"+{normalized}"
+        if normalized.startswith("+54") and not normalized.startswith("+549"):
+            rest = normalized[3:]
+            if len(rest) == 10:
+                normalized = f"+549{rest}"
+        phone_variants = [normalized]
+        if normalized.startswith("+549"):
+            phone_variants.append(f"+54{normalized[4:]}")
+
+        row = await pool.fetchrow(
+            "SELECT id FROM users WHERE phone = ANY($1) AND is_active = true",
+            phone_variants,
+        )
+        return str(row["id"]) if row else None
+
     async def _execute_tool(
         self,
         tool_name: str,
@@ -183,24 +202,32 @@ class ReminderAgent(BaseAgent):
         try:
             pool = await get_pool()
 
+            user_id = await self._resolve_user_id(pool, phone)
+            if not user_id:
+                return {"success": False, "error": "No se encontró tu usuario."}
+
             if tool_name == "crear_recordatorio":
                 message = args.get("message", "")
                 trigger_date = args.get("trigger_date")
                 trigger_time = args.get("trigger_time", "09:00")
                 recurrence = args.get("recurrence", "none")
 
-                # Default to tomorrow if no date
                 if not trigger_date:
                     trigger_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
 
+                trigger_at = datetime.strptime(
+                    f"{trigger_date} {trigger_time}", "%Y-%m-%d %H:%M"
+                )
+                recurrence_rule = None if recurrence == "none" else recurrence
+
                 query = """
                     INSERT INTO reminders (
-                        tenant_id, user_phone, message, trigger_date, trigger_time, recurrence
-                    ) VALUES ($1, $2, $3, $4, $5, $6)
+                        tenant_id, user_id, message, trigger_at, recurrence_rule
+                    ) VALUES ($1, $2, $3, $4, $5)
                     RETURNING id
                 """
                 row = await pool.fetchrow(
-                    query, tenant_id, phone, message, trigger_date, trigger_time, recurrence
+                    query, tenant_id, user_id, message, trigger_at, recurrence_rule
                 )
                 return {
                     "success": True,
@@ -215,29 +242,30 @@ class ReminderAgent(BaseAgent):
 
             elif tool_name == "listar_recordatorios":
                 search = args.get("search", "")
-                
+
                 query = """
-                    SELECT id, message, trigger_date, trigger_time, recurrence
+                    SELECT id, message, trigger_at, recurrence_rule, status
                     FROM reminders
-                    WHERE tenant_id = $1 AND user_phone = $2
-                      AND (trigger_date >= CURRENT_DATE OR recurrence != 'none')
+                    WHERE tenant_id = $1 AND user_id = $2
+                      AND (trigger_at >= NOW() OR recurrence_rule IS NOT NULL)
+                      AND status = 'pending'
                 """
-                params = [tenant_id, phone]
-                
+                params: list[Any] = [tenant_id, user_id]
+
                 if search:
                     query += " AND message ILIKE $3"
                     params.append(f"%{search}%")
-                
-                query += " ORDER BY trigger_date, trigger_time LIMIT 20"
-                
+
+                query += " ORDER BY trigger_at LIMIT 20"
+
                 rows = await pool.fetch(query, *params)
                 reminders = [
                     {
                         "id": str(row["id"]),
                         "message": row["message"],
-                        "trigger_date": row["trigger_date"].strftime("%Y-%m-%d") if row["trigger_date"] else None,
-                        "trigger_time": row["trigger_time"],
-                        "recurrence": row["recurrence"],
+                        "trigger_date": row["trigger_at"].strftime("%Y-%m-%d") if row["trigger_at"] else None,
+                        "trigger_time": row["trigger_at"].strftime("%H:%M") if row["trigger_at"] else None,
+                        "recurrence": row["recurrence_rule"] or "none",
                     }
                     for row in rows
                 ]
@@ -245,15 +273,15 @@ class ReminderAgent(BaseAgent):
 
             elif tool_name == "eliminar_recordatorio":
                 search_query = args.get("search_query", "")
-                
-                # Find matching reminder
+
                 query = """
-                    DELETE FROM reminders
-                    WHERE tenant_id = $1 AND user_phone = $2 AND message ILIKE $3
+                    UPDATE reminders SET status = 'cancelled'
+                    WHERE tenant_id = $1 AND user_id = $2
+                      AND message ILIKE $3 AND status = 'pending'
                     RETURNING id, message
                 """
-                row = await pool.fetchrow(query, tenant_id, phone, f"%{search_query}%")
-                
+                row = await pool.fetchrow(query, tenant_id, user_id, f"%{search_query}%")
+
                 if row:
                     return {
                         "success": True,
