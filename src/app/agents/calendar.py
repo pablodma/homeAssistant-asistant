@@ -50,7 +50,7 @@ class CalendarAgent(BaseAgent):
         # Build messages
         messages = [
             {"role": "system", "content": prompt},
-            {"role": "system", "content": f"Fecha actual: {datetime.now().strftime('%Y-%m-%d %H:%M')}. Usuario: {phone}"},
+            {"role": "system", "content": f"Hoy es {['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'][datetime.now().weekday()]} {datetime.now().strftime('%Y-%m-%d %H:%M')}. Usuario: {phone}"},
         ]
 
         # Add history context
@@ -452,7 +452,7 @@ class CalendarAgent(BaseAgent):
 
             sync_status = event.get("sync_status", "local")
             if sync_status != "synced":
-                google_tip = await self._get_google_connect_tip(tenant_id, original_message)
+                google_tip = await self._get_google_connect_tip(tenant_id, phone)
                 if google_tip:
                     response += f"\n\n{google_tip}"
 
