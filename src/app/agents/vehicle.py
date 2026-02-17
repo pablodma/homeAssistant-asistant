@@ -231,7 +231,7 @@ class VehicleAgent(BaseAgent):
         except Exception as e:
             logger.error("Vehicle agent error", error=str(e))
             return AgentResult(
-                response="Hubo un problema procesando tu solicitud sobre el vehículo.",
+                response="Hubo un problema procesando tu solicitud. Intentá de nuevo.",
                 agent_used=self.name,
             )
 

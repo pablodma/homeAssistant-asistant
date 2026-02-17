@@ -305,7 +305,7 @@ class FinanceAgent(BaseAgent):
                 exception=e,
             )
             return AgentResult(
-                response="Hubo un problema procesando tu solicitud de finanzas.",
+                response="Hubo un problema procesando tu solicitud. Intentá de nuevo.",
                 agent_used=self.name,
             )
 

@@ -183,7 +183,7 @@ class ShoppingAgent(BaseAgent):
         except Exception as e:
             logger.error("Shopping agent error", error=str(e))
             return AgentResult(
-                response="Hubo un problema procesando tu solicitud de lista de compras.",
+                response="Hubo un problema procesando tu solicitud. Intentá de nuevo.",
                 agent_used=self.name,
             )
 

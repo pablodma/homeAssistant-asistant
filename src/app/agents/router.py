@@ -46,6 +46,9 @@ class RouterAgent(BaseAgent):
             elif agent_name == "vehicle":
                 from .vehicle import VehicleAgent
                 self._sub_agents[agent_name] = VehicleAgent()
+            elif agent_name == "subscription":
+                from .subscription import SubscriptionAgent
+                self._sub_agents[agent_name] = SubscriptionAgent()
 
         return self._sub_agents.get(agent_name)
 
@@ -198,6 +201,23 @@ class RouterAgent(BaseAgent):
                             "user_request": {
                                 "type": "string",
                                 "description": "El pedido del usuario relacionado con vehículos",
+                            }
+                        },
+                        "required": ["user_request"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "subscription_agent",
+                    "description": "Gestiona plan, suscripción, upgrade, downgrade, cancelar, uso, invitar miembros al hogar",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "user_request": {
+                                "type": "string",
+                                "description": "El pedido del usuario relacionado con suscripción o miembros",
                             }
                         },
                         "required": ["user_request"],

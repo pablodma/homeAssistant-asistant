@@ -218,7 +218,7 @@ class CalendarAgent(BaseAgent):
         except Exception as e:
             logger.error("Calendar agent error", error=str(e))
             return AgentResult(
-                response="Hubo un problema procesando tu solicitud de calendario.",
+                response="Hubo un problema procesando tu solicitud. Intentá de nuevo.",
                 agent_used=self.name,
             )
 
