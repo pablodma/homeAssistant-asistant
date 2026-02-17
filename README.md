@@ -16,7 +16,7 @@ Sistema de asistente virtual del hogar multi-tenant que gestiona presupuestos, a
 ## Stack
 
 - **Framework**: FastAPI (Python 3.11+)
-- **LLM**: OpenAI (gpt-4.1-mini)
+- **LLM**: OpenAI (gpt-5-mini)
 - **Agent Framework**: LangChain
 - **Database**: PostgreSQL (asyncpg)
 - **WhatsApp**: Meta Business Cloud API
