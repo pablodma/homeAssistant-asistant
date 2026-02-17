@@ -265,9 +265,6 @@ class RouterAgent(BaseAgent):
                     try:
                         args = json.loads(tool_call.function.arguments)
                         user_request = args.get("user_request", message)
-                        # #region agent log
-                        print(f"[DEBUG] router_dispatch: agent={agent_name} user_request={user_request[:150]} original_msg={message[:100]}")
-                        # #endregion
 
                         result = await sub_agent.process(
                             message=message,

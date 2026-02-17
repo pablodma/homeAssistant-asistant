@@ -55,9 +55,6 @@ class CalendarAgent(BaseAgent):
             {"role": "system", "content": prompt},
             {"role": "system", "content": date_context},
         ]
-        # #region agent log
-        print(f"[DEBUG] cal_date_ctx: date_context={date_context} weekday_num={now.weekday()} day_name={day_name}")
-        # #endregion
 
         # Add history context
         for msg in history[-6:]:
@@ -196,9 +193,6 @@ class CalendarAgent(BaseAgent):
                 tool_args = json.loads(tool_call.function.arguments)
 
                 logger.info(f"Calendar tool call: {tool_name}", args=tool_args)
-                # #region agent log
-                print(f"[DEBUG] cal_tool_args: tool={tool_name} args={tool_args} msg={message[:100]}")
-                # #endregion
 
                 # Execute the tool
                 tool_result = await self._execute_tool(tool_name, tool_args, tenant_id, phone)
@@ -393,9 +387,6 @@ class CalendarAgent(BaseAgent):
         try:
             base_url = f"{self.settings.backend_api_url}/api/v1/tenants/{tenant_id}"
             headers = {"Authorization": f"Bearer {self.settings.backend_api_key}"}
-            # #region agent log
-            print(f"[DEBUG] cal_tip_phone: phone={phone} tenant={tenant_id} url={base_url}/agent/calendar/connection-status")
-            # #endregion
 
             async with httpx.AsyncClient() as client:
                 response = await client.get(
@@ -404,9 +395,7 @@ class CalendarAgent(BaseAgent):
                     headers=headers,
                     timeout=10.0,
                 )
-                # #region agent log
-                print(f"[DEBUG] cal_tip_resp: status={response.status_code} body={response.text[:200]}")
-                # #endregion
+
                 if response.status_code == 200:
                     data = response.json()
                     if not data.get("connected") and data.get("auth_url"):
