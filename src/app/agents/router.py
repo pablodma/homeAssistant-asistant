@@ -233,7 +233,7 @@ class RouterAgent(BaseAgent):
                 tools=tools,
                 tool_choice="auto",
                 max_tokens=1000,
-                temperature=0.7,
+                temperature=0.4,
             )
 
             choice = response.choices[0]

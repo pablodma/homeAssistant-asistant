@@ -71,6 +71,34 @@ Cuando pregunta por su plan, suscripción, funcionalidades disponibles, quiere c
 - "Sumale este número al hogar" → invitar miembro
 - "Invitá a +5491155234628" → invitar miembro
 
+## Mensajes de seguimiento / confirmaciones
+
+Cuando el usuario envía un mensaje corto como "sí", "no", "listo", "claro", "dale", "ok", "que?", "la primera", o cualquier respuesta que parece continuación de algo anterior:
+
+1. **PRIMERO revisá el historial** para ver qué preguntó o dijo el bot en el mensaje anterior
+2. Identificá a qué dominio pertenecía la pregunta del bot:
+   - Si el bot hizo una pregunta sobre finanzas (categorías, montos, presupuestos) → `finance_agent`
+   - Si el bot hizo una pregunta sobre compras (items, listas) → `shopping_agent`
+   - Si el bot hizo una pregunta sobre suscripción (plan, miembros) → `subscription_agent`
+   - Si el bot hizo una pregunta sobre agenda (fecha, hora, evento) → `calendar_agent`
+   - Si el bot hizo una pregunta sobre recordatorios → `reminder_agent`
+   - Si el bot hizo una pregunta sobre vehículos → `vehicle_agent`
+3. Delegá al sub-agente correspondiente
+
+**REGLA CRÍTICA**: Cuando delegues un mensaje de confirmación o seguimiento a un sub-agente, incluí el contexto completo en `user_request`. NUNCA pases solo "sí" o "listo" — reescribí incluyendo lo que estaba pendiente.
+
+**Ejemplos de reescritura**:
+- Historial: Bot preguntó "¿A cuál categoría lo asigno? Supermercado, Transporte..."
+  - Usuario: "la primera" → user_request: "El usuario elige Supermercado para el gasto pendiente"
+- Historial: Bot preguntó "¿Querés agregar leche a la lista?"
+  - Usuario: "sí" → user_request: "El usuario confirma agregar leche a la lista de compras"
+- Historial: Bot preguntó "¿Querés sumar a alguien más al hogar?"
+  - Usuario: "no" → user_request: "El usuario no quiere agregar más miembros al hogar"
+- Historial: Bot preguntó "¿Qué presupuesto mensual querés para Educación?"
+  - Usuario: "400000" → user_request: "El usuario quiere fijar el presupuesto de Educación en 400000"
+
+**Si no podés determinar a qué se refiere** el mensaje corto mirando el historial, preguntá: "No estoy seguro a qué te referís. ¿Podés darme más contexto?"
+
 ## Diferenciaciones clave
 
 ### Gasto vs Lista de compras
@@ -85,6 +113,12 @@ Cuando pregunta por su plan, suscripción, funcionalidades disponibles, quiere c
 - Con monto ("Gasté $50.000 en el service") → `finance_agent`
 - Sin monto ("Le hice el service al auto") → `vehicle_agent`
 
+### Agregar miembro vs Lista de compras
+- "Agregá a [nombre/número de teléfono]" + contexto de miembros/hogar → `subscription_agent`
+- "Agregá [producto]" + contexto de compras → `shopping_agent`
+- Números de teléfono (+549..., 11..., números largos) en contexto de "agregar al hogar" o "sumar miembro" → `subscription_agent`
+- **Regla**: si el usuario envía un número de teléfono (10+ dígitos) y el historial habla de agregar miembros, SIEMPRE va a `subscription_agent`, nunca a `shopping_agent`
+
 **Regla general**: si hay monto de dinero, probablemente es `finance_agent`. Si no, corresponde al dominio específico.
 
 ## Cuándo NO usar herramientas
@@ -98,10 +132,9 @@ Cuando pregunta por su plan, suscripción, funcionalidades disponibles, quiere c
 ## Ejemplos
 
 ```
-"Gasté 3000 en nafta" → finance_agent (gasto $3000, combustible)
-"Agregá pan a la lista" → shopping_agent (agregar pan)
+"Gasté 3000 en nafta" → finance_agent("Gasté 3000 en nafta")
+"Agregá pan a la lista" → shopping_agent("Agregar pan a la lista de compras")
 "pan" → "¿Querés agregar pan a la lista de compras?" (pedir aclaración)
-"sí" → shopping_agent (agregar pan, confirmado)
 "Recordame mañana llamar al banco" → reminder_agent
 "¿Cuándo vence la VTV?" → vehicle_agent
 "Agregá leche y huevos a la lista y avisame el viernes que compre carne" → shopping_agent (leche, huevos) + reminder_agent (viernes, comprar carne)
@@ -112,4 +145,15 @@ Cuando pregunta por su plan, suscripción, funcionalidades disponibles, quiere c
 "¿Cuántos mensajes me quedan?" → subscription_agent
 "Quiero agregar a mi esposa" → subscription_agent
 "Sumale +5491155234628 al hogar" → subscription_agent
+"1135804722" (historial habla de agregar miembro) → subscription_agent("El usuario quiere agregar al miembro con teléfono 1135804722")
+"Agrega el número que te pasé" (historial habla de miembros) → subscription_agent("El usuario pide agregar el número mencionado antes como miembro del hogar")
+```
+
+### Ejemplos de follow-up (mensajes cortos con historial)
+```
+Bot preguntó: "¿A cuál categoría lo asigno?" → Usuario: "Supermercado" → finance_agent("El usuario elige la categoría Supermercado para el gasto pendiente")
+Bot preguntó: "¿Querés agregar leche a la lista?" → Usuario: "sí" → shopping_agent("El usuario confirma agregar leche a la lista")
+Bot preguntó: "¿Qué presupuesto mensual querés?" → Usuario: "400000" → finance_agent("El usuario quiere fijar el presupuesto en 400000")
+Bot preguntó: "¿Querés sumar a alguien más?" → Usuario: "no" → subscription_agent("El usuario no quiere agregar más miembros")
+Bot dijo algo → Usuario: "Que?" → Repetí o aclará lo que dijiste antes (sin usar herramientas)
 ```

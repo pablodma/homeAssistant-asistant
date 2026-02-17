@@ -54,7 +54,7 @@ class CalendarAgent(BaseAgent):
         ]
 
         # Add history context
-        for msg in history[-4:]:
+        for msg in history[-6:]:
             messages.append({"role": msg.role, "content": msg.content})
 
         messages.append({"role": "user", "content": message})

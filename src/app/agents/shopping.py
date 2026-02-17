@@ -53,7 +53,7 @@ class ShoppingAgent(BaseAgent):
         ]
 
         # Add history context
-        for msg in history[-4:]:
+        for msg in history[-6:]:
             messages.append({"role": msg.role, "content": msg.content})
 
         messages.append({"role": "user", "content": message})
@@ -341,8 +341,8 @@ class ShoppingAgent(BaseAgent):
             Formatted response.
         """
         if not result.get("success"):
-            error = result.get("error", "Error desconocido")
-            return f"❌ No pude completar la operación: {error}"
+            logger.error("Shopping tool failed", error=result.get("error"), tool=tool_name)
+            return "Hubo un problema procesando tu solicitud. Intentá de nuevo."
 
         data = result.get("data", {})
 
