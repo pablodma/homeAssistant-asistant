@@ -50,7 +50,7 @@ class VehicleAgent(BaseAgent):
         # Build messages
         messages = [
             {"role": "system", "content": prompt},
-            {"role": "system", "content": f"Fecha actual: {datetime.now().strftime('%Y-%m-%d')}"},
+            {"role": "system", "content": f"Hoy es {['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'][datetime.now().weekday()]} {datetime.now().strftime('%Y-%m-%d')}."},
         ]
 
         # Add history context

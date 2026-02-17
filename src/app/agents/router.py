@@ -1,5 +1,6 @@
 """Router Agent - Main orchestrator."""
 
+from datetime import datetime
 from typing import Optional
 
 import structlog
@@ -109,8 +110,11 @@ class RouterAgent(BaseAgent):
         prompt = await self.get_prompt(tenant_id)
 
         # Build messages
+        now = datetime.now()
+        day_name = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'][now.weekday()]
         messages = [
             {"role": "system", "content": prompt},
+            {"role": "system", "content": f"Hoy es {day_name} {now.strftime('%Y-%m-%d %H:%M')}."},
         ]
 
         # Add history
@@ -261,6 +265,9 @@ class RouterAgent(BaseAgent):
                     try:
                         args = json.loads(tool_call.function.arguments)
                         user_request = args.get("user_request", message)
+                        # #region agent log
+                        print(f"[DEBUG] router_dispatch: agent={agent_name} user_request={user_request[:150]} original_msg={message[:100]}")
+                        # #endregion
 
                         result = await sub_agent.process(
                             message=user_request,

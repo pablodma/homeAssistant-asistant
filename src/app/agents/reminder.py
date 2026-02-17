@@ -50,7 +50,7 @@ class ReminderAgent(BaseAgent):
         # Build messages
         messages = [
             {"role": "system", "content": prompt},
-            {"role": "system", "content": f"Fecha y hora actual: {datetime.now().strftime('%Y-%m-%d %H:%M')}"},
+            {"role": "system", "content": f"Hoy es {['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'][datetime.now().weekday()]} {datetime.now().strftime('%Y-%m-%d %H:%M')}."},
         ]
 
         # Add history context
