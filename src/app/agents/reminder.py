@@ -117,7 +117,7 @@ class ReminderAgent(BaseAgent):
                 messages=messages,
                 tools=tools,
                 tool_choice="auto",
-                max_tokens=1000,
+                max_completion_tokens=1000,
                 temperature=0.3,
             )
 

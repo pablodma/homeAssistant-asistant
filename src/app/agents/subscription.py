@@ -324,7 +324,7 @@ class SubscriptionAgent(BaseAgent):
                     messages=messages,
                     tools=tools,
                     tool_choice="auto",
-                    max_tokens=1500,
+                    max_completion_tokens=1500,
                     temperature=0.5,
                 )
 
