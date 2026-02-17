@@ -48,10 +48,16 @@ class CalendarAgent(BaseAgent):
         prompt = await self.get_prompt(tenant_id)
 
         # Build messages
+        now = datetime.now()
+        day_name = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'][now.weekday()]
+        date_context = f"Hoy es {day_name} {now.strftime('%Y-%m-%d %H:%M')}. Usuario: {phone}"
         messages = [
             {"role": "system", "content": prompt},
-            {"role": "system", "content": f"Hoy es {['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'][datetime.now().weekday()]} {datetime.now().strftime('%Y-%m-%d %H:%M')}. Usuario: {phone}"},
+            {"role": "system", "content": date_context},
         ]
+        # #region agent log
+        import json as _json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a").write(_json.dumps({"id": "cal_date_ctx", "timestamp": int(now.timestamp()*1000), "location": "calendar.py:53", "message": "Date context sent to LLM", "data": {"date_context": date_context, "weekday_num": now.weekday(), "day_name": day_name}, "hypothesisId": "H1_weekday"}) + "\n")
+        # #endregion
 
         # Add history context
         for msg in history[-6:]:
@@ -190,6 +196,9 @@ class CalendarAgent(BaseAgent):
                 tool_args = json.loads(tool_call.function.arguments)
 
                 logger.info(f"Calendar tool call: {tool_name}", args=tool_args)
+                # #region agent log
+                import json as _json2; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a").write(_json2.dumps({"id": "cal_tool_args", "timestamp": int(__import__('time').time()*1000), "location": "calendar.py:198", "message": "LLM tool call args", "data": {"tool_name": tool_name, "args": tool_args, "user_message": message[:100]}, "hypothesisId": "H1_weekday"}) + "\n")
+                # #endregion
 
                 # Execute the tool
                 tool_result = await self._execute_tool(tool_name, tool_args, tenant_id, phone)
@@ -384,6 +393,9 @@ class CalendarAgent(BaseAgent):
         try:
             base_url = f"{self.settings.backend_api_url}/api/v1/tenants/{tenant_id}"
             headers = {"Authorization": f"Bearer {self.settings.backend_api_key}"}
+            # #region agent log
+            import json as _json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a").write(_json.dumps({"id": "cal_tip_phone", "timestamp": int(__import__('time').time()*1000), "location": "calendar.py:_get_google_connect_tip", "message": "Google tip called", "data": {"phone": phone, "tenant_id": tenant_id, "url": f"{base_url}/agent/calendar/connection-status"}, "hypothesisId": "H2_phone_param"}) + "\n")
+            # #endregion
 
             async with httpx.AsyncClient() as client:
                 response = await client.get(
@@ -392,6 +404,9 @@ class CalendarAgent(BaseAgent):
                     headers=headers,
                     timeout=10.0,
                 )
+                # #region agent log
+                open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a").write(_json.dumps({"id": "cal_tip_resp", "timestamp": int(__import__('time').time()*1000), "location": "calendar.py:_get_google_connect_tip", "message": "Google tip response", "data": {"status": response.status_code, "body": response.text[:200]}, "hypothesisId": "H2_phone_param"}) + "\n")
+                # #endregion
                 if response.status_code == 200:
                     data = response.json()
                     if not data.get("connected") and data.get("auth_url"):
