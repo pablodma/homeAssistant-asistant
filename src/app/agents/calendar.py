@@ -196,7 +196,8 @@ class CalendarAgent(BaseAgent):
 
                 # Generate response based on tool result
                 response_text = await self._generate_response(
-                    tool_name, tool_args, tool_result, message
+                    tool_name, tool_args, tool_result, message,
+                    tenant_id=tenant_id, phone=phone,
                 )
 
                 return AgentResult(
@@ -377,12 +378,35 @@ class CalendarAgent(BaseAgent):
             line += f"\n  📍 {location}"
         return line
 
+    async def _get_google_connect_tip(self, tenant_id: str, phone: str) -> str | None:
+        """Check Google Calendar connection and return a tip with auth URL if not connected."""
+        try:
+            base_url = f"{self.settings.backend_api_url}/api/v1/tenants/{tenant_id}"
+            headers = {"Authorization": f"Bearer {self.settings.backend_api_key}"}
+
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{base_url}/agent/calendar/connection-status",
+                    params={"user_phone": phone},
+                    headers=headers,
+                    timeout=10.0,
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    if not data.get("connected") and data.get("auth_url"):
+                        return f"💡 Sincronizá con Google Calendar para verlo en tu agenda:\n👉 {data['auth_url']}"
+        except Exception:
+            pass
+        return None
+
     async def _generate_response(
         self,
         tool_name: str,
         args: dict[str, Any],
         result: dict[str, Any],
         original_message: str,
+        tenant_id: str = "",
+        phone: str = "",
     ) -> str:
         """Generate a user-friendly response from tool result.
 
@@ -391,6 +415,8 @@ class CalendarAgent(BaseAgent):
             args: Tool arguments.
             result: Tool execution result.
             original_message: The original user message.
+            tenant_id: The tenant ID (for Google Calendar check).
+            phone: User's phone number (for Google Calendar check).
 
         Returns:
             Formatted response.
@@ -422,6 +448,13 @@ class CalendarAgent(BaseAgent):
             if location:
                 response += f"\n📍 {location}"
             response += f"\n⏱️ Duración: {duration} min"
+
+            sync_status = event.get("sync_status", "local")
+            if sync_status != "synced":
+                google_tip = await self._get_google_connect_tip(tenant_id, original_message)
+                if google_tip:
+                    response += f"\n\n{google_tip}"
+
             return response
 
         elif tool_name == "listar_eventos":
