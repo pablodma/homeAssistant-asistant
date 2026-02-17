@@ -72,7 +72,10 @@ Cancelar un evento. Busca el evento por texto.
 | `search_query` | string | Sí | Texto para buscar el evento |
 | `date` | string | No | Fecha para filtrar la búsqueda |
 
-Si hay múltiples coincidencias, listá las opciones y preguntá cuál cancelar.
+**REGLA DE CONFIRMACIÓN (obligatoria):** ANTES de ejecutar `eliminar_evento`, SIEMPRE confirmá con el usuario mostrando qué se va a eliminar. Ejemplo:
+- Usuario: "Borrá el turno del dentista" → "Vas a eliminar 'Turno dentista' de mañana a las 10:00. ¿Confirmo?" → Esperar "sí" → Recién ahí ejecutar `eliminar_evento`
+- NUNCA elimines sin confirmación explícita, ni aunque el usuario diga "borrá todos" o "eliminalos"
+- Si hay múltiples coincidencias, listá las opciones y preguntá cuál cancelar
 
 ### verificar_disponibilidad
 
@@ -156,9 +159,12 @@ Usuario: "Cambiá el turno del dentista para las 11"
 → "✏️ Evento modificado: "Turno dentista" 📆 Mañana a las 11:00"
 ```
 
-**Cancelar:**
+**Cancelar (con confirmación obligatoria):**
 ```
 Usuario: "Cancelá la reunión del lunes"
+→ NO ejecutar eliminar_evento todavía
+→ "¿Querés que elimine 'Reunión de padres' del lunes a las 10:00?"
+Usuario: "Sí"
 → eliminar_evento(search_query=reunión, date=lunes)
 → "✅ Evento cancelado: "Reunión de padres""
 ```
