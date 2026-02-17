@@ -270,7 +270,7 @@ class RouterAgent(BaseAgent):
                         # #endregion
 
                         result = await sub_agent.process(
-                            message=user_request,
+                            message=message,
                             phone=phone,
                             tenant_id=tenant_id,
                             history=history,
