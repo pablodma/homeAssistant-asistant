@@ -127,8 +127,7 @@ Si no hay problema, respondé: {{"has_issue": false, "category": null, "explanat
                 messages=[
                     {"role": "user", "content": user_prompt},
                 ],
-                max_completion_tokens=500,
-                temperature=0.1,  # Low temperature for consistent analysis
+                max_tokens=500,
             )
 
             # Parse response

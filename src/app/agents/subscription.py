@@ -325,7 +325,6 @@ class SubscriptionAgent(BaseAgent):
                     tools=tools,
                     tool_choice="auto",
                     max_completion_tokens=1500,
-                    temperature=0.5,
                 )
 
                 choice = response.choices[0]

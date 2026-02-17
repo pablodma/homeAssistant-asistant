@@ -118,7 +118,6 @@ class ReminderAgent(BaseAgent):
                 tools=tools,
                 tool_choice="auto",
                 max_completion_tokens=1000,
-                temperature=0.3,
             )
 
             choice = response.choices[0]
