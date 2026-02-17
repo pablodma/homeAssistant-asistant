@@ -31,7 +31,7 @@ class Settings(BaseSettings):
 
     # OpenAI (used by router, finance, calendar, etc.)
     openai_api_key: str
-    openai_model: str = "gpt-4.1-mini"
+    openai_model: str = "gpt-5-mini"
     whisper_model: str = "whisper-1"
 
     # Anthropic (used by QA and Prompt Improver agents)
