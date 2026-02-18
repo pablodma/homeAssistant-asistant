@@ -331,7 +331,7 @@ class SubscriptionAgent(BaseAgent):
         for msg in history[-6:]:
             messages.append({"role": msg.role, "content": msg.content})
 
-        messages.append({"role": "user", "content": message})
+        messages.append({"role": "user", "content": f"[USER_MSG]{message}[/USER_MSG]"})
 
         try:
             total_tokens_in = 0

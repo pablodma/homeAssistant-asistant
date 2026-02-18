@@ -17,6 +17,8 @@ from ..agents.subscription import SubscriptionAgent
 from ..agents.qa import QAAgent
 from ..services.conversation import ConversationService
 from ..services.interaction_log import InteractionLogger
+from ..services.input_guard import sanitize_message
+from ..services.output_guard import check_response
 from ..services.quality_logger import get_quality_logger
 from ..services.phone_resolver import get_phone_resolver
 from ..services.transcription import get_transcription_service
@@ -241,30 +243,25 @@ async def process_message(message: IncomingMessage) -> None:
                 )
                 return
 
+        # Input guard: sanitize and flag injection attempts
+        guard_result = sanitize_message(message.text or "")
+        message = message.model_copy(update={"text": guard_result.text})
+
         # Resolve tenant by phone number
         phone_resolver = get_phone_resolver()
         phone_info = await phone_resolver.resolve(message.phone)
 
         if not phone_info:
-            # Phone not registered - invoke SubscriptionAgent for onboarding
             logger.info("unregistered_phone_onboarding", phone=message.phone)
-            # #region agent log
-            import json as _dbg_json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a", encoding="utf-8").write(_dbg_json.dumps({"timestamp": __import__("time").time(), "location": "webhook.py:249", "message": "mode_decision", "data": {"phone": message.phone, "phone_info": None, "mode": "acquisition"}, "hypothesisId": "H1,H2"}) + "\n")
-            # #endregion
             await _handle_unregistered_user(message, whatsapp)
             return
 
         if not phone_info.onboarding_completed:
-            # Registered but setup incomplete (post-payment) - invoke SubscriptionAgent in setup mode
             logger.info(
                 "setup_pending",
                 phone=message.phone,
                 tenant_id=phone_info.tenant_id,
             )
-            # #region agent log
-            import json as _dbg_json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a", encoding="utf-8").write(_dbg_json.dumps({"timestamp": __import__("time").time(), "location": "webhook.py:259", "message": "mode_decision", "data": {"phone": message.phone, "tenant_id": phone_info.tenant_id, "onboarding_completed": False, "mode": "setup"}, "hypothesisId": "H3,H4"}) + "\n")
-            # #endregion
-            # Invalidate cache so next call picks up completed onboarding
             phone_resolver.invalidate_cache(message.phone)
             await _handle_setup_user(message, phone_info, whatsapp)
             return
@@ -308,8 +305,11 @@ async def process_message(message: IncomingMessage) -> None:
 
         agent_used = result.agent_used
 
-        # Send response (always text - prompt handles conversational flows)
-        await whatsapp.send_text(message.phone, result.response)
+        # Output guard: check for prompt leakage, sensitive data, length
+        output_check = check_response(result.response, agent_name=result.sub_agent_used or result.agent_used)
+        response_text = output_check.text
+
+        await whatsapp.send_text(message.phone, response_text)
 
         # Save to conversation history
         await conversation_service.add_message(
@@ -322,7 +322,7 @@ async def process_message(message: IncomingMessage) -> None:
             phone=message.phone,
             tenant_id=tenant_id,
             role="assistant",
-            content=result.response,
+            content=response_text,
         )
 
         # Log interaction and get ID for QA
@@ -330,12 +330,18 @@ async def process_message(message: IncomingMessage) -> None:
         interaction_metadata = result.metadata or {}
         if message.is_audio:
             interaction_metadata["input_type"] = "audio"
+        if guard_result.injection_suspected:
+            interaction_metadata["injection_suspected"] = True
+            interaction_metadata["injection_patterns"] = guard_result.matched_patterns
+        if output_check.was_modified:
+            interaction_metadata["output_guard_modified"] = True
+            interaction_metadata["output_guard_leak"] = output_check.leak_detected
         interaction_id = await interaction_logger.log(
             tenant_id=tenant_id,
             user_phone=message.phone,
             user_name=user_name,
             message_in=message.text,
-            message_out=result.response,
+            message_out=response_text,
             agent_used=result.agent_used,
             sub_agent_used=result.sub_agent_used,
             tokens_in=result.tokens_in,
@@ -361,9 +367,9 @@ async def process_message(message: IncomingMessage) -> None:
                     tenant_id=tenant_id,
                     user_phone=message.phone,
                     message_in=message.text,
-                    message_out=result.response,
+                    message_out=response_text,
                     agent_name=result.sub_agent_used or result.agent_used,
-                    metadata=result.metadata,
+                    metadata=interaction_metadata,
                 )
             )
 

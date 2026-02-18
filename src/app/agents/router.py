@@ -121,8 +121,8 @@ class RouterAgent(BaseAgent):
         for msg in history[-6:]:  # Last 6 messages
             messages.append({"role": msg.role, "content": msg.content})
 
-        # Add current message
-        messages.append({"role": "user", "content": message})
+        # Add current message wrapped with delimiters for injection defense
+        messages.append({"role": "user", "content": f"[USER_MSG]{message}[/USER_MSG]"})
 
         # Define tools for agent selection
         tools = [
