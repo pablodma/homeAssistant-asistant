@@ -248,6 +248,9 @@ async def process_message(message: IncomingMessage) -> None:
         if not phone_info:
             # Phone not registered - invoke SubscriptionAgent for onboarding
             logger.info("unregistered_phone_onboarding", phone=message.phone)
+            # #region agent log
+            import json as _dbg_json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a", encoding="utf-8").write(_dbg_json.dumps({"timestamp": __import__("time").time(), "location": "webhook.py:249", "message": "mode_decision", "data": {"phone": message.phone, "phone_info": None, "mode": "acquisition"}, "hypothesisId": "H1,H2"}) + "\n")
+            # #endregion
             await _handle_unregistered_user(message, whatsapp)
             return
 
@@ -258,6 +261,9 @@ async def process_message(message: IncomingMessage) -> None:
                 phone=message.phone,
                 tenant_id=phone_info.tenant_id,
             )
+            # #region agent log
+            import json as _dbg_json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a", encoding="utf-8").write(_dbg_json.dumps({"timestamp": __import__("time").time(), "location": "webhook.py:259", "message": "mode_decision", "data": {"phone": message.phone, "tenant_id": phone_info.tenant_id, "onboarding_completed": False, "mode": "setup"}, "hypothesisId": "H3,H4"}) + "\n")
+            # #endregion
             # Invalidate cache so next call picks up completed onboarding
             phone_resolver.invalidate_cache(message.phone)
             await _handle_setup_user(message, phone_info, whatsapp)
@@ -422,6 +428,9 @@ async def _handle_setup_user(
             tenant_id=tenant_id,
             limit=10,
         )
+        # #region agent log
+        import json as _dbg_json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a", encoding="utf-8").write(_dbg_json.dumps({"timestamp": __import__("time").time(), "location": "webhook.py:432", "message": "setup_history", "data": {"phone": message.phone, "tenant_id": tenant_id, "history_count": len(history), "history_preview": [{"role": h.role, "content": h.content[:60]} for h in history[-3:]]}, "hypothesisId": "H4"}) + "\n")
+        # #endregion
 
         # Process through SubscriptionAgent in setup mode
         subscription_agent = SubscriptionAgent()

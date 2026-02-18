@@ -82,6 +82,17 @@ ACQUISITION_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_payment_status",
+            "description": "Verifica si el pago del usuario fue procesado. OBLIGATORIO usarla cuando el usuario dice que ya pagó. Consulta el estado real del registro.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
 ]
 
 # Tool definitions for post-payment setup (registered but onboarding_completed=false)
@@ -270,6 +281,9 @@ class SubscriptionAgent(BaseAgent):
             contact_name=contact_name,
             message=message[:50],
         )
+        # #region agent log
+        import json as _dbg_json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a", encoding="utf-8").write(_dbg_json.dumps({"timestamp": __import__("time").time(), "location": "subscription.py:274", "message": "agent_mode", "data": {"mode": mode, "explicit_mode": explicit_mode, "tenant_id": tenant_id, "phone": phone, "message_preview": message[:80]}, "hypothesisId": "H1,H2,H3"}) + "\n")
+        # #endregion
 
         quality_logger = get_quality_logger()
 
@@ -288,6 +302,8 @@ class SubscriptionAgent(BaseAgent):
             f"- Modo: {mode_labels.get(mode, mode)}\n"
             f"- Teléfono del usuario: {phone}\n"
         )
+        if mode == "setup":
+            mode_context += "- Estado del pago: CONFIRMADO por el sistema (la cuenta ya fue creada tras verificar el pago)\n"
         if contact_name:
             mode_context += f"- Nombre de perfil WhatsApp: {contact_name}\n"
         if tenant_id:
@@ -334,6 +350,9 @@ class SubscriptionAgent(BaseAgent):
                     total_tokens_out += response.usage.completion_tokens
 
                 if not choice.message.tool_calls:
+                    # #region agent log
+                    import json as _dbg_json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a", encoding="utf-8").write(_dbg_json.dumps({"timestamp": __import__("time").time(), "location": "subscription.py:340", "message": "no_tool_call_response", "data": {"mode": mode, "response_preview": (choice.message.content or "")[:150], "tool_calls": None}, "hypothesisId": "H1,H2,H3"}) + "\n")
+                    # #endregion
                     return AgentResult(
                         response=choice.message.content or "No pude procesar tu solicitud.",
                         agent_used=self.name,
@@ -351,6 +370,9 @@ class SubscriptionAgent(BaseAgent):
                     args=tool_args,
                     mode=mode,
                 )
+                # #region agent log
+                import json as _dbg_json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a", encoding="utf-8").write(_dbg_json.dumps({"timestamp": __import__("time").time(), "location": "subscription.py:358", "message": "tool_call_executed", "data": {"mode": mode, "tool_name": tool_name, "tool_args": tool_args}, "hypothesisId": "H3"}) + "\n")
+                # #endregion
 
                 tool_result = await self._execute_tool(
                     tool_name=tool_name,
@@ -446,6 +468,9 @@ class SubscriptionAgent(BaseAgent):
                 elif tool_name == "validate_coupon":
                     return await self._validate_coupon(client, base_url, args)
 
+                elif tool_name == "check_payment_status":
+                    return await self._check_payment_status(client, base_url, phone)
+
                 elif tool_name == "complete_setup":
                     return await self._complete_setup(
                         client, base_url, headers, tenant_id, args
@@ -499,6 +524,44 @@ class SubscriptionAgent(BaseAgent):
     def _normalize_phone(phone: str) -> str:
         """Ensure phone has + prefix for E.164 format."""
         return phone if phone.startswith("+") else f"+{phone}"
+
+    async def _check_payment_status(
+        self,
+        client: httpx.AsyncClient,
+        base_url: str,
+        phone: str,
+    ) -> dict[str, Any]:
+        """Check if payment has been processed for this phone number.
+
+        Queries the phone lookup endpoint to see if the user has been
+        registered (which only happens after successful payment via LS webhook).
+        """
+        normalized = self._normalize_phone(phone)
+        response = await client.get(
+            f"{base_url}/api/v1/phone/lookup",
+            params={"phone": normalized},
+        )
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("found"):
+                return {
+                    "success": True,
+                    "data": {
+                        "payment_confirmed": True,
+                        "message": "El pago fue procesado. El usuario será redirigido automáticamente al configurar su hogar en su próximo mensaje.",
+                    },
+                }
+            return {
+                "success": True,
+                "data": {
+                    "payment_confirmed": False,
+                    "message": "El pago todavía no fue procesado por el sistema.",
+                },
+            }
+        return {
+            "success": False,
+            "error": "No se pudo verificar el estado del pago",
+        }
 
     async def _create_checkout(
         self,
