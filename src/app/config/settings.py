@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     whatsapp_phone_number_id: str
     whatsapp_verify_token: str
     whatsapp_access_token: str
+    whatsapp_app_secret: str = ""
 
     # OpenAI
     openai_api_key: str
@@ -52,8 +53,14 @@ class Settings(BaseSettings):
     backend_api_url: str = "http://localhost:8000"
     backend_api_key: str = ""
 
+    # Shared secret for /internal/* endpoints (backend -> bot communication)
+    internal_api_secret: str = ""
+
     # Database
     database_url: str
+
+    # CORS (only needed for /docs in development; the bot has no browser clients)
+    cors_origins: str = "http://localhost:8000"
 
     # Rate Limiting
     max_messages_per_minute: int = 20

@@ -5,9 +5,11 @@ This webhook only routes messages and sends responses.
 """
 
 import asyncio
+import hashlib
+import hmac
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
 
 from ..config import get_settings
 from ..agents.router import RouterAgent
@@ -23,6 +25,25 @@ from .types import IncomingMessage, WhatsAppWebhookPayload
 
 logger = structlog.get_logger()
 router = APIRouter(tags=["WhatsApp Webhook"])
+
+# Per-phone rate limiter (in-memory, resets on restart)
+_rate_limit_store: dict[str, list[float]] = {}
+
+
+def _is_rate_limited(phone: str, max_per_minute: int = 20) -> bool:
+    """Check if a phone number has exceeded the rate limit."""
+    import time
+
+    now = time.time()
+    window = 60.0
+
+    timestamps = _rate_limit_store.get(phone, [])
+    timestamps = [t for t in timestamps if now - t < window]
+    timestamps.append(now)
+    _rate_limit_store[phone] = timestamps
+
+    return len(timestamps) > max_per_minute
+
 
 # QA Agent singleton
 _qa_agent: QAAgent | None = None
@@ -63,6 +84,16 @@ async def verify_webhook(
     return Response(content="Verification failed", status_code=403)
 
 
+def _verify_webhook_signature(payload: bytes, signature_header: str, app_secret: str) -> bool:
+    """Verify Meta's X-Hub-Signature-256 HMAC signature."""
+    expected = hmac.new(
+        app_secret.encode(),
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(f"sha256={expected}", signature_header)
+
+
 @router.post("/webhook")
 async def receive_webhook(
     request: Request,
@@ -74,8 +105,23 @@ async def receive_webhook(
     and processes them in the background.
     """
     try:
-        body = await request.json()
-        logger.debug("Webhook received", body=body)
+        settings = get_settings()
+        raw_body = await request.body()
+
+        if settings.whatsapp_app_secret:
+            signature = request.headers.get("x-hub-signature-256", "")
+            if not signature or not _verify_webhook_signature(
+                raw_body, signature, settings.whatsapp_app_secret
+            ):
+                logger.warning("Invalid webhook signature")
+                raise HTTPException(status_code=401, detail="Invalid signature")
+        elif settings.is_production:
+            logger.error("WHATSAPP_APP_SECRET not configured in production")
+            raise HTTPException(status_code=500, detail="Webhook verification not configured")
+
+        import json
+        body = json.loads(raw_body)
+        logger.debug("Webhook received")
 
         # Parse webhook payload
         payload = WhatsAppWebhookPayload.model_validate(body)
@@ -129,13 +175,22 @@ async def process_message(message: IncomingMessage) -> None:
     import time
 
     start_time = time.time()
-    settings = get_settings()
     whatsapp = get_whatsapp_client()
     quality_logger = get_quality_logger()
 
     # Track context for error logging
     tenant_id: str | None = None
     agent_used: str | None = None
+
+    settings = get_settings()
+    if _is_rate_limited(message.phone, settings.max_messages_per_minute):
+        logger.warning("Rate limited", phone=message.phone)
+        whatsapp = get_whatsapp_client()
+        await whatsapp.send_text(
+            message.phone,
+            "Estás enviando mensajes muy rápido. Esperá un momento e intentá de nuevo.",
+        )
+        return
 
     logger.info(
         "Processing message",

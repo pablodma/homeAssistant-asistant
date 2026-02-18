@@ -16,18 +16,38 @@ Usage:
 """
 
 import traceback
-from typing import Optional
+from typing import Annotated, Optional
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from ..config import get_settings
 from ..config.database import get_pool
 from ..services.qa_reviewer import QABatchReviewer
 
 logger = structlog.get_logger()
 
-router = APIRouter(prefix="/internal", tags=["internal"])
+
+async def verify_internal_secret(
+    x_internal_secret: Annotated[str | None, Header(alias="x-internal-secret")] = None,
+) -> None:
+    """Verify shared secret for internal endpoints."""
+    settings = get_settings()
+    if not settings.internal_api_secret:
+        if settings.is_production:
+            raise HTTPException(status_code=500, detail="Internal API secret not configured")
+        return
+
+    if not x_internal_secret or x_internal_secret != settings.internal_api_secret:
+        raise HTTPException(status_code=401, detail="Invalid internal API secret")
+
+
+router = APIRouter(
+    prefix="/internal",
+    tags=["internal"],
+    dependencies=[Depends(verify_internal_secret)],
+)
 
 
 # =====================================================
