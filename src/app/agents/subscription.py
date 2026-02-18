@@ -38,13 +38,17 @@ ACQUISITION_TOOLS = [
         "type": "function",
         "function": {
             "name": "create_checkout",
-            "description": "Genera un link de pago de Lemon Squeezy para cualquier plan. El teléfono se obtiene automáticamente. NO pide home_name (se configura después del pago).",
+            "description": "Genera un link de pago de Lemon Squeezy para cualquier plan. El teléfono se obtiene automáticamente. NO pide home_name (se configura después del pago). REQUIERE email del usuario.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "display_name": {
                         "type": "string",
                         "description": "Nombre del usuario",
+                    },
+                    "email": {
+                        "type": "string",
+                        "description": "Email del usuario (para facturación)",
                     },
                     "plan_type": {
                         "type": "string",
@@ -56,7 +60,7 @@ ACQUISITION_TOOLS = [
                         "description": "Código de cupón (opcional)",
                     },
                 },
-                "required": ["display_name", "plan_type"],
+                "required": ["display_name", "email", "plan_type"],
             },
         },
     },
@@ -582,6 +586,7 @@ class SubscriptionAgent(BaseAgent):
             json={
                 "phone": self._normalize_phone(phone),
                 "display_name": args["display_name"],
+                "email": args["email"],
                 "plan_type": args["plan_type"],
                 "coupon_code": args.get("coupon_code"),
             },
