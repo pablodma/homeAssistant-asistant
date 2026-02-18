@@ -4,10 +4,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-import httpx
 import structlog
 
 from ..config import get_settings
+from ..services.backend_client import get_backend_client
 from ..services.prompt_loader import PromptLoader
 
 logger = structlog.get_logger()
@@ -76,20 +76,20 @@ class BaseAgent(ABC):
             return False
 
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(
-                    f"{self.settings.backend_api_url}/api/v1/agent-onboarding/status",
-                    params={"phone": phone, "agent": self.name},
-                    headers={"Authorization": f"Bearer {self.settings.backend_api_key}"},
-                )
-                if resp.status_code == 200:
-                    return resp.json().get("is_first_time", False)
-                logger.warning(
-                    "First-time check failed",
-                    status=resp.status_code,
-                    agent=self.name,
-                )
-                return False
+            backend = get_backend_client()
+            resp = await backend.get(
+                "/api/v1/agent-onboarding/status",
+                timeout=10.0,
+                params={"phone": phone, "agent": self.name},
+            )
+            if resp.status_code == 200:
+                return resp.json().get("is_first_time", False)
+            logger.warning(
+                "First-time check failed",
+                status=resp.status_code,
+                agent=self.name,
+            )
+            return False
         except Exception:
             logger.exception("Error checking first-time status", agent=self.name)
             return False
@@ -104,20 +104,20 @@ class BaseAgent(ABC):
             Confirmation message for the LLM tool result.
         """
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(
-                    f"{self.settings.backend_api_url}/api/v1/agent-onboarding/complete",
-                    json={"phone": phone, "agent_name": self.name},
-                    headers={"Authorization": f"Bearer {self.settings.backend_api_key}"},
-                )
-                if resp.status_code == 200:
-                    return "Configuración inicial completada exitosamente."
-                logger.warning(
-                    "First-time complete failed",
-                    status=resp.status_code,
-                    agent=self.name,
-                )
-                return "No se pudo marcar la configuración como completada."
+            backend = get_backend_client()
+            resp = await backend.post(
+                "/api/v1/agent-onboarding/complete",
+                timeout=10.0,
+                json={"phone": phone, "agent_name": self.name},
+            )
+            if resp.status_code == 200:
+                return "Configuración inicial completada exitosamente."
+            logger.warning(
+                "First-time complete failed",
+                status=resp.status_code,
+                agent=self.name,
+            )
+            return "No se pudo marcar la configuración como completada."
         except Exception:
             logger.exception("Error completing first-time onboarding", agent=self.name)
             return "Error al completar la configuración inicial."

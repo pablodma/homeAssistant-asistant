@@ -6,7 +6,7 @@ from typing import Optional
 import httpx
 import structlog
 
-from ..config import get_settings
+from .backend_client import get_backend_client
 
 logger = structlog.get_logger()
 
@@ -32,7 +32,6 @@ class PhoneResolver:
     def __init__(self) -> None:
         """Initialize the phone resolver."""
         self._cache: dict[str, PhoneTenantInfo | None] = {}
-        self._settings = get_settings()
     
     async def resolve(self, phone: str) -> PhoneTenantInfo | None:
         """
@@ -44,15 +43,12 @@ class PhoneResolver:
         Returns:
             PhoneTenantInfo if found, None if phone is not registered
         """
-        # Check cache first (only positive results are cached)
         if phone in self._cache:
             logger.debug("phone_cache_hit", phone=phone)
             return self._cache[phone]
         
-        # Query backend
         result = await self._lookup_phone(phone)
         
-        # Only cache positive results - unregistered phones may register later
         if result is not None:
             self._cache[phone] = result
         
@@ -68,52 +64,51 @@ class PhoneResolver:
         Returns:
             PhoneTenantInfo if found, None otherwise
         """
-        url = f"{self._settings.backend_api_url}/api/v1/phone/lookup"
+        backend = get_backend_client()
         
         logger.debug(
             "phone_lookup_starting",
             phone=phone,
-            url=url,
-            backend_url=self._settings.backend_api_url,
         )
         
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(url, params={"phone": phone})
-                
-                logger.debug(
-                    "phone_lookup_response",
+            response = await backend.get(
+                "/api/v1/phone/lookup", params={"phone": phone}
+            )
+            
+            logger.debug(
+                "phone_lookup_response",
+                phone=phone,
+                status_code=response.status_code,
+            )
+            
+            if response.status_code != 200:
+                logger.warning(
+                    "phone_lookup_failed",
                     phone=phone,
-                    status_code=response.status_code,
+                    status=response.status_code,
                 )
-                
-                if response.status_code != 200:
-                    logger.warning(
-                        "phone_lookup_failed",
-                        phone=phone,
-                        status=response.status_code,
-                    )
-                    return None
-                
-                data = response.json()
-                
-                if not data.get("found"):
-                    logger.info("phone_not_registered", phone=phone)
-                    return None
-                
-                logger.info(
-                    "phone_resolved",
-                    phone=phone,
-                    tenant_id=data.get("tenant_id"),
-                    home_name=data.get("home_name"),
-                )
-                
-                return PhoneTenantInfo(
-                    tenant_id=data["tenant_id"],
-                    user_name=data.get("user_name"),
-                    home_name=data.get("home_name"),
-                    onboarding_completed=data.get("onboarding_completed", True),
-                )
+                return None
+            
+            data = response.json()
+            
+            if not data.get("found"):
+                logger.info("phone_not_registered", phone=phone)
+                return None
+            
+            logger.info(
+                "phone_resolved",
+                phone=phone,
+                tenant_id=data.get("tenant_id"),
+                home_name=data.get("home_name"),
+            )
+            
+            return PhoneTenantInfo(
+                tenant_id=data["tenant_id"],
+                user_name=data.get("user_name"),
+                home_name=data.get("home_name"),
+                onboarding_completed=data.get("onboarding_completed", True),
+            )
                 
         except httpx.RequestError as e:
             logger.error(
@@ -121,7 +116,6 @@ class PhoneResolver:
                 phone=phone,
                 error=str(e),
                 error_type=type(e).__name__,
-                url=url,
             )
             return None
         except Exception as e:
@@ -130,19 +124,11 @@ class PhoneResolver:
                 phone=phone,
                 error=str(e),
                 error_type=type(e).__name__,
-                url=url,
             )
             return None
     
     def invalidate_cache(self, phone: str) -> None:
-        """
-        Remove a phone from the cache.
-        
-        Call this when a phone's tenant association changes.
-        
-        Args:
-            phone: Phone number to remove from cache
-        """
+        """Remove a phone from the cache."""
         if phone in self._cache:
             del self._cache[phone]
             logger.debug("phone_cache_invalidated", phone=phone)
@@ -153,7 +139,6 @@ class PhoneResolver:
         logger.info("phone_cache_cleared")
 
 
-# Singleton instance
 _resolver: PhoneResolver | None = None
 
 

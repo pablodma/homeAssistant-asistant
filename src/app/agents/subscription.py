@@ -10,11 +10,11 @@ All decision logic is in the prompt (docs/prompts/subscription-agent.md).
 import json
 from typing import Any, Optional
 
-import httpx
 import structlog
 from openai import AsyncOpenAI
 
 from ..config import get_settings
+from ..services.backend_client import get_backend_client
 from ..services.quality_logger import get_quality_logger
 from .base import AgentResult, BaseAgent
 
@@ -285,10 +285,6 @@ class SubscriptionAgent(BaseAgent):
             contact_name=contact_name,
             message=message[:50],
         )
-        # #region agent log
-        import json as _dbg_json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a", encoding="utf-8").write(_dbg_json.dumps({"timestamp": __import__("time").time(), "location": "subscription.py:274", "message": "agent_mode", "data": {"mode": mode, "explicit_mode": explicit_mode, "tenant_id": tenant_id, "phone": phone, "message_preview": message[:80]}, "hypothesisId": "H1,H2,H3"}) + "\n")
-        # #endregion
-
         quality_logger = get_quality_logger()
 
         # Use a dummy tenant_id for prompt loading (prompts are not tenant-specific)
@@ -354,9 +350,6 @@ class SubscriptionAgent(BaseAgent):
                     total_tokens_out += response.usage.completion_tokens
 
                 if not choice.message.tool_calls:
-                    # #region agent log
-                    import json as _dbg_json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a", encoding="utf-8").write(_dbg_json.dumps({"timestamp": __import__("time").time(), "location": "subscription.py:340", "message": "no_tool_call_response", "data": {"mode": mode, "response_preview": (choice.message.content or "")[:150], "tool_calls": None}, "hypothesisId": "H1,H2,H3"}) + "\n")
-                    # #endregion
                     return AgentResult(
                         response=choice.message.content or "No pude procesar tu solicitud.",
                         agent_used=self.name,
@@ -374,9 +367,6 @@ class SubscriptionAgent(BaseAgent):
                     args=tool_args,
                     mode=mode,
                 )
-                # #region agent log
-                import json as _dbg_json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a", encoding="utf-8").write(_dbg_json.dumps({"timestamp": __import__("time").time(), "location": "subscription.py:358", "message": "tool_call_executed", "data": {"mode": mode, "tool_name": tool_name, "tool_args": tool_args}, "hypothesisId": "H3"}) + "\n")
-                # #endregion
 
                 tool_result = await self._execute_tool(
                     tool_name=tool_name,
@@ -458,68 +448,42 @@ class SubscriptionAgent(BaseAgent):
         Returns:
             Tool execution result dict.
         """
-        base_url = self.settings.backend_api_url
-        headers = {"Authorization": f"Bearer {self.settings.backend_api_key}"}
+        backend = get_backend_client()
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                if tool_name == "get_plans":
-                    return await self._get_plans(client, base_url)
+        try:
+            if tool_name == "get_plans":
+                return await self._get_plans(backend)
+            elif tool_name == "create_checkout":
+                return await self._create_checkout(backend, args, phone)
+            elif tool_name == "validate_coupon":
+                return await self._validate_coupon(backend, args)
+            elif tool_name == "check_payment_status":
+                return await self._check_payment_status(backend, phone)
+            elif tool_name == "complete_setup":
+                return await self._complete_setup(backend, tenant_id, args)
+            elif tool_name == "get_subscription_status":
+                return await self._get_subscription_status(backend, tenant_id)
+            elif tool_name == "get_usage":
+                return await self._get_usage(backend, tenant_id)
+            elif tool_name == "create_upgrade_checkout":
+                return await self._create_upgrade_checkout(backend, tenant_id, args)
+            elif tool_name == "cancel_subscription":
+                return await self._cancel_subscription(backend, tenant_id, args)
+            elif tool_name == "invite_member":
+                return await self._invite_member(backend, tenant_id, args)
+            else:
+                return {"success": False, "error": f"Unknown tool: {tool_name}"}
 
-                elif tool_name == "create_checkout":
-                    return await self._create_checkout(client, base_url, headers, args, phone)
-
-                elif tool_name == "validate_coupon":
-                    return await self._validate_coupon(client, base_url, args)
-
-                elif tool_name == "check_payment_status":
-                    return await self._check_payment_status(client, base_url, phone)
-
-                elif tool_name == "complete_setup":
-                    return await self._complete_setup(
-                        client, base_url, headers, tenant_id, args
-                    )
-
-                elif tool_name == "get_subscription_status":
-                    return await self._get_subscription_status(
-                        client, base_url, headers, tenant_id
-                    )
-
-                elif tool_name == "get_usage":
-                    return await self._get_usage(client, base_url, headers, tenant_id)
-
-                elif tool_name == "create_upgrade_checkout":
-                    return await self._create_upgrade_checkout(
-                        client, base_url, headers, tenant_id, args
-                    )
-
-                elif tool_name == "cancel_subscription":
-                    return await self._cancel_subscription(
-                        client, base_url, headers, tenant_id, args
-                    )
-
-                elif tool_name == "invite_member":
-                    return await self._invite_member(
-                        client, base_url, headers, tenant_id, args
-                    )
-
-                else:
-                    return {"success": False, "error": f"Unknown tool: {tool_name}"}
-
-            except httpx.TimeoutException:
-                logger.error(f"Tool timeout: {tool_name}")
-                return {"success": False, "error": "Timeout al conectar con el servidor"}
-            except Exception as e:
-                logger.error(f"Tool failed: {tool_name}", error=str(e))
-                return {"success": False, "error": str(e)}
+        except Exception as e:
+            logger.error(f"Tool failed: {tool_name}", error=str(e))
+            return {"success": False, "error": str(e)}
 
     async def _get_plans(
         self,
-        client: httpx.AsyncClient,
-        base_url: str,
+        backend: Any,
     ) -> dict[str, Any]:
-        """Fetch available plans from backend (public endpoint)."""
-        response = await client.get(f"{base_url}/api/v1/plans")
+        """Fetch available plans from backend."""
+        response = await backend.get("/api/v1/plans")
         if response.status_code == 200:
             return {"success": True, "data": response.json()}
         return {"success": False, "error": f"Error fetching plans: {response.status_code}"}
@@ -531,8 +495,7 @@ class SubscriptionAgent(BaseAgent):
 
     async def _check_payment_status(
         self,
-        client: httpx.AsyncClient,
-        base_url: str,
+        backend: Any,
         phone: str,
     ) -> dict[str, Any]:
         """Check if payment has been processed for this phone number.
@@ -541,8 +504,8 @@ class SubscriptionAgent(BaseAgent):
         registered (which only happens after successful payment via LS webhook).
         """
         normalized = self._normalize_phone(phone)
-        response = await client.get(
-            f"{base_url}/api/v1/phone/lookup",
+        response = await backend.get(
+            "/api/v1/phone/lookup",
             params={"phone": normalized},
         )
         if response.status_code == 200:
@@ -569,20 +532,17 @@ class SubscriptionAgent(BaseAgent):
 
     async def _create_checkout(
         self,
-        client: httpx.AsyncClient,
-        base_url: str,
-        headers: dict[str, str],
+        backend: Any,
         args: dict[str, Any],
         phone: str,
     ) -> dict[str, Any]:
         """Create a pending registration and generate LS checkout link.
 
         All plans (including Starter) go through checkout. home_name is NOT
-        collected here — it's configured post-payment via complete_setup.
+        collected here -- it's configured post-payment via complete_setup.
         """
-        pending_response = await client.post(
-            f"{base_url}/api/v1/onboarding/whatsapp/pending",
-            headers=headers,
+        pending_response = await backend.post(
+            "/api/v1/onboarding/whatsapp/pending",
             json={
                 "phone": self._normalize_phone(phone),
                 "display_name": args["display_name"],
@@ -610,13 +570,12 @@ class SubscriptionAgent(BaseAgent):
 
     async def _validate_coupon(
         self,
-        client: httpx.AsyncClient,
-        base_url: str,
+        backend: Any,
         args: dict[str, Any],
     ) -> dict[str, Any]:
         """Validate a coupon code."""
-        response = await client.post(
-            f"{base_url}/api/v1/coupons/validate",
+        response = await backend.post(
+            "/api/v1/coupons/validate",
             json={
                 "code": args["coupon_code"],
                 "plan_type": args["plan_type"],
@@ -636,16 +595,13 @@ class SubscriptionAgent(BaseAgent):
 
     async def _complete_setup(
         self,
-        client: httpx.AsyncClient,
-        base_url: str,
-        headers: dict[str, str],
+        backend: Any,
         tenant_id: str,
         args: dict[str, Any],
     ) -> dict[str, Any]:
         """Complete home setup after payment (set home_name, mark onboarding done)."""
-        response = await client.patch(
-            f"{base_url}/api/v1/tenants/{tenant_id}/setup",
-            headers=headers,
+        response = await backend.patch(
+            f"/api/v1/tenants/{tenant_id}/setup",
             json={"home_name": args["home_name"]},
         )
         if response.status_code == 200:
@@ -655,15 +611,12 @@ class SubscriptionAgent(BaseAgent):
 
     async def _get_subscription_status(
         self,
-        client: httpx.AsyncClient,
-        base_url: str,
-        headers: dict[str, str],
+        backend: Any,
         tenant_id: str,
     ) -> dict[str, Any]:
         """Get subscription status for a tenant."""
-        response = await client.get(
-            f"{base_url}/api/v1/subscriptions/usage/{tenant_id}",
-            headers=headers,
+        response = await backend.get(
+            f"/api/v1/subscriptions/usage/{tenant_id}",
         )
         if response.status_code == 200:
             return {"success": True, "data": response.json()}
@@ -671,15 +624,12 @@ class SubscriptionAgent(BaseAgent):
 
     async def _get_usage(
         self,
-        client: httpx.AsyncClient,
-        base_url: str,
-        headers: dict[str, str],
+        backend: Any,
         tenant_id: str,
     ) -> dict[str, Any]:
         """Get usage stats for a tenant."""
-        response = await client.get(
-            f"{base_url}/api/v1/subscriptions/usage/{tenant_id}",
-            headers=headers,
+        response = await backend.get(
+            f"/api/v1/subscriptions/usage/{tenant_id}",
         )
         if response.status_code == 200:
             return {"success": True, "data": response.json()}
@@ -687,16 +637,13 @@ class SubscriptionAgent(BaseAgent):
 
     async def _create_upgrade_checkout(
         self,
-        client: httpx.AsyncClient,
-        base_url: str,
-        headers: dict[str, str],
+        backend: Any,
         tenant_id: str,
         args: dict[str, Any],
     ) -> dict[str, Any]:
         """Generate checkout URL for plan upgrade or reactivation."""
-        response = await client.post(
-            f"{base_url}/api/v1/subscriptions/upgrade",
-            headers=headers,
+        response = await backend.post(
+            "/api/v1/subscriptions/upgrade",
             json={
                 "tenant_id": tenant_id,
                 "plan_type": args["plan_type"],
@@ -715,9 +662,7 @@ class SubscriptionAgent(BaseAgent):
 
     async def _cancel_subscription(
         self,
-        client: httpx.AsyncClient,
-        base_url: str,
-        headers: dict[str, str],
+        backend: Any,
         tenant_id: str,
         args: dict[str, Any],
     ) -> dict[str, Any]:
@@ -728,9 +673,8 @@ class SubscriptionAgent(BaseAgent):
                 "error": "Cancelación no confirmada por el usuario",
             }
 
-        response = await client.post(
-            f"{base_url}/api/v1/subscriptions/cancel-by-tenant",
-            headers=headers,
+        response = await backend.post(
+            "/api/v1/subscriptions/cancel-by-tenant",
             json={
                 "tenant_id": tenant_id,
                 "reason": args.get("reason", "Sin motivo"),
@@ -742,16 +686,13 @@ class SubscriptionAgent(BaseAgent):
 
     async def _invite_member(
         self,
-        client: httpx.AsyncClient,
-        base_url: str,
-        headers: dict[str, str],
+        backend: Any,
         tenant_id: str,
         args: dict[str, Any],
     ) -> dict[str, Any]:
         """Invite a member to the tenant's household."""
-        response = await client.post(
-            f"{base_url}/api/v1/tenants/{tenant_id}/members/bot",
-            headers=headers,
+        response = await backend.post(
+            f"/api/v1/tenants/{tenant_id}/members/bot",
             json={
                 "phone": args["phone"],
             },

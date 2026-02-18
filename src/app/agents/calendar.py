@@ -4,11 +4,11 @@ import json
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
-import httpx
 import structlog
 from openai import AsyncOpenAI
 
 from ..config import get_settings
+from ..services.backend_client import get_backend_client
 from .base import FIRST_TIME_TOOL_DEFINITION, AgentResult, BaseAgent
 
 logger = structlog.get_logger()
@@ -280,105 +280,85 @@ class CalendarAgent(BaseAgent):
         Returns:
             Tool execution result.
         """
-        base_url = f"{self.settings.backend_api_url}/api/v1/tenants/{tenant_id}"
-        headers = {"Authorization": f"Bearer {self.settings.backend_api_key}"}
+        base_path = f"/api/v1/tenants/{tenant_id}"
+        backend = get_backend_client()
 
-        async with httpx.AsyncClient() as client:
-            try:
-                if tool_name == "crear_evento":
-                    payload = {
-                        "title": args["title"],
-                        "event_date": args.get("date"),
-                        "start_time": args.get("time"),
-                        "duration_minutes": args.get("duration_minutes", 60),
-                        "location": args.get("location"),
-                        "description": args.get("description"),
-                        "user_phone": phone,
-                    }
-                    payload = {k: v for k, v in payload.items() if v is not None}
-                    response = await client.post(
-                        f"{base_url}/agent/calendar/event",
-                        json=payload,
-                        headers=headers,
-                        timeout=30.0,
-                    )
-                elif tool_name == "listar_eventos":
-                    params = {k: v for k, v in args.items() if v}
-                    params["user_phone"] = phone
-                    response = await client.get(
-                        f"{base_url}/agent/calendar/events",
-                        params=params,
-                        headers=headers,
-                        timeout=30.0,
-                    )
-                elif tool_name == "modificar_evento":
-                    payload = {"search_query": args.get("search_query")}
-                    if args.get("title"):
-                        payload["title"] = args["title"]
-                    if args.get("date"):
-                        payload["event_date"] = args["date"]
-                    if args.get("time"):
-                        payload["start_time"] = args["time"]
-                    if args.get("location"):
-                        payload["location"] = args["location"]
-                    response = await client.put(
-                        f"{base_url}/agent/calendar/event/search",
-                        json=payload,
-                        params={"user_phone": phone},
-                        headers=headers,
-                        timeout=30.0,
-                    )
-                elif tool_name == "eliminar_evento":
-                    payload = {"search_query": args.get("search_query")}
-                    if args.get("date"):
-                        payload["event_date"] = args["date"]
-                    response = await client.request(
-                        "DELETE",
-                        f"{base_url}/agent/calendar/event/search",
-                        json=payload,
-                        params={"user_phone": phone},
-                        headers=headers,
-                        timeout=30.0,
-                    )
-                elif tool_name == "verificar_disponibilidad":
-                    args["user_phone"] = phone
-                    response = await client.get(
-                        f"{base_url}/agent/calendar/availability",
-                        params=args,
-                        headers=headers,
-                        timeout=30.0,
-                    )
-                elif tool_name == "estado_google":
-                    response = await client.get(
-                        f"{base_url}/agent/calendar/connection-status",
-                        params={"user_phone": phone},
-                        headers=headers,
-                        timeout=30.0,
-                    )
-                elif tool_name == "proximo_evento":
-                    response = await client.get(
-                        f"{base_url}/agent/calendar/next",
-                        params={"user_phone": phone},
-                        headers=headers,
-                        timeout=30.0,
-                    )
-                else:
-                    return {"success": False, "error": f"Unknown tool: {tool_name}"}
+        try:
+            if tool_name == "crear_evento":
+                payload = {
+                    "title": args["title"],
+                    "event_date": args.get("date"),
+                    "start_time": args.get("time"),
+                    "duration_minutes": args.get("duration_minutes", 60),
+                    "location": args.get("location"),
+                    "description": args.get("description"),
+                    "user_phone": phone,
+                }
+                payload = {k: v for k, v in payload.items() if v is not None}
+                response = await backend.post(
+                    f"{base_path}/agent/calendar/event", json=payload,
+                )
+            elif tool_name == "listar_eventos":
+                params = {k: v for k, v in args.items() if v}
+                params["user_phone"] = phone
+                response = await backend.get(
+                    f"{base_path}/agent/calendar/events", params=params,
+                )
+            elif tool_name == "modificar_evento":
+                payload = {"search_query": args.get("search_query")}
+                if args.get("title"):
+                    payload["title"] = args["title"]
+                if args.get("date"):
+                    payload["event_date"] = args["date"]
+                if args.get("time"):
+                    payload["start_time"] = args["time"]
+                if args.get("location"):
+                    payload["location"] = args["location"]
+                response = await backend.put(
+                    f"{base_path}/agent/calendar/event/search",
+                    json=payload, params={"user_phone": phone},
+                )
+            elif tool_name == "eliminar_evento":
+                payload = {"search_query": args.get("search_query")}
+                if args.get("date"):
+                    payload["event_date"] = args["date"]
+                response = await backend.request(
+                    "DELETE",
+                    f"{base_path}/agent/calendar/event/search",
+                    json=payload, params={"user_phone": phone},
+                )
+            elif tool_name == "verificar_disponibilidad":
+                args["user_phone"] = phone
+                response = await backend.get(
+                    f"{base_path}/agent/calendar/availability", params=args,
+                )
+            elif tool_name == "estado_google":
+                response = await backend.get(
+                    f"{base_path}/agent/calendar/connection-status",
+                    params={"user_phone": phone},
+                )
+            elif tool_name == "proximo_evento":
+                response = await backend.get(
+                    f"{base_path}/agent/calendar/next",
+                    params={"user_phone": phone},
+                )
+            else:
+                return {"success": False, "error": f"Unknown tool: {tool_name}"}
 
-                if response.status_code in (200, 201):
-                    return {"success": True, "data": response.json()}
-                elif response.status_code == 204:
-                    return {"success": True, "data": {}}
-                else:
-                    return {
-                        "success": False,
-                        "error": response.text,
-                        "status_code": response.status_code,
-                    }
+            if response.status_code in (200, 201):
+                return {"success": True, "data": response.json()}
+            elif response.status_code == 204:
+                return {"success": True, "data": {}}
+            else:
+                return {
+                    "success": False,
+                    "error": response.text,
+                    "status_code": response.status_code,
+                }
 
-            except Exception as e:
-                logger.error(f"Tool execution failed: {tool_name}", error=str(e))
-                return {"success": False, "error": str(e)}
+        except Exception as e:
+            logger.error(f"Tool execution failed: {tool_name}", error=str(e))
+            return {"success": False, "error": str(e)}
 
     def _parse_event_datetime(self, event: dict[str, Any]) -> tuple[str, str]:
         """Extract date and time from an event's start_datetime field.
@@ -421,21 +401,16 @@ class CalendarAgent(BaseAgent):
     async def _get_google_connect_tip(self, tenant_id: str, phone: str) -> str | None:
         """Check Google Calendar connection and return a tip with auth URL if not connected."""
         try:
-            base_url = f"{self.settings.backend_api_url}/api/v1/tenants/{tenant_id}"
-            headers = {"Authorization": f"Bearer {self.settings.backend_api_key}"}
-
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{base_url}/agent/calendar/connection-status",
-                    params={"user_phone": phone},
-                    headers=headers,
-                    timeout=10.0,
-                )
-
-                if response.status_code == 200:
-                    data = response.json()
-                    if not data.get("connected") and data.get("auth_url"):
-                        return f"💡 Sincronizá con Google Calendar para verlo en tu agenda:\n👉 {data['auth_url']}"
+            backend = get_backend_client()
+            response = await backend.get(
+                f"/api/v1/tenants/{tenant_id}/agent/calendar/connection-status",
+                timeout=10.0,
+                params={"user_phone": phone},
+            )
+            if response.status_code == 200:
+                data = response.json()
+                if not data.get("connected") and data.get("auth_url"):
+                    return f"💡 Sincronizá con Google Calendar para verlo en tu agenda:\n👉 {data['auth_url']}"
         except Exception:
             pass
         return None

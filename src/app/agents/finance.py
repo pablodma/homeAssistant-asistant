@@ -7,11 +7,11 @@ the code only executes tools and formats responses.
 import json
 from typing import Any, Optional
 
-import httpx
 import structlog
 from openai import AsyncOpenAI
 
 from ..config import get_settings
+from ..services.backend_client import get_backend_client
 from ..services.quality_logger import get_quality_logger
 from .base import FIRST_TIME_TOOL_DEFINITION, AgentResult, BaseAgent
 
@@ -344,119 +344,81 @@ class FinanceAgent(BaseAgent):
         Returns:
             Tool execution result.
         """
-        base_url = f"{self.settings.backend_api_url}/api/v1/tenants/{tenant_id}"
-        headers = {"Authorization": f"Bearer {self.settings.backend_api_key}"}
+        base_path = f"/api/v1/tenants/{tenant_id}"
+        backend = get_backend_client()
         quality_logger = get_quality_logger()
 
-        async with httpx.AsyncClient() as client:
-            try:
-                # Map tool names to HTTP calls
-                if tool_name == "registrar_gasto":
-                    response = await client.post(
-                        f"{base_url}/agent/expense",
-                        params=args,
-                        headers=headers,
-                        timeout=30.0,
-                    )
-                elif tool_name == "consultar_reporte":
-                    response = await client.get(
-                        f"{base_url}/agent/report",
-                        params=args,
-                        headers=headers,
-                        timeout=30.0,
-                    )
-                elif tool_name == "consultar_presupuesto":
-                    response = await client.get(
-                        f"{base_url}/agent/budget",
-                        params=args,
-                        headers=headers,
-                        timeout=30.0,
-                    )
-                elif tool_name == "eliminar_gasto":
-                    response = await client.delete(
-                        f"{base_url}/agent/expense",
-                        params=args,
-                        headers=headers,
-                        timeout=30.0,
-                    )
-                elif tool_name == "eliminar_gasto_masivo":
-                    response = await client.delete(
-                        f"{base_url}/agent/expenses/bulk",
-                        params=args,
-                        headers=headers,
-                        timeout=30.0,
-                    )
-                elif tool_name == "modificar_gasto":
-                    response = await client.patch(
-                        f"{base_url}/agent/expense",
-                        params=args,
-                        headers=headers,
-                        timeout=30.0,
-                    )
-                elif tool_name == "fijar_presupuesto":
-                    response = await client.put(
-                        f"{base_url}/agent/budget",
-                        params=args,
-                        headers=headers,
-                        timeout=30.0,
-                    )
-                elif tool_name == "completar_configuracion_inicial":
-                    result_msg = await self.complete_first_time(user_phone or "")
-                    return {"success": True, "data": {"message": result_msg}}
-                else:
-                    return {"success": False, "error": f"Unknown tool: {tool_name}"}
-
-                if response.status_code == 200:
-                    return {"success": True, "data": response.json()}
-                else:
-                    error_text = response.text[:500] if response.text else "No response body"
-                    await quality_logger.log_hard_error(
-                        tenant_id=tenant_id,
-                        category="api_error",
-                        error_message=f"Backend API returned {response.status_code}: {error_text}",
-                        error_code=str(response.status_code),
-                        agent_name=self.name,
-                        tool_name=tool_name,
-                        user_phone=user_phone,
-                        message_in=message_in,
-                        severity="high" if response.status_code >= 500 else "medium",
-                        request_payload={"tool_args": args},
-                    )
-                    return {
-                        "success": False,
-                        "error": error_text,
-                        "status_code": response.status_code,
-                    }
-
-            except httpx.TimeoutException as e:
-                logger.error(f"Tool execution timeout: {tool_name}", error=str(e))
-                await quality_logger.log_hard_error(
-                    tenant_id=tenant_id,
-                    category="timeout",
-                    error_message=f"Backend API timeout for {tool_name}",
-                    agent_name=self.name,
-                    tool_name=tool_name,
-                    user_phone=user_phone,
-                    message_in=message_in,
-                    severity="high",
-                    exception=e,
+        try:
+            if tool_name == "registrar_gasto":
+                response = await backend.post(
+                    f"{base_path}/agent/expense", params=args,
                 )
-                return {"success": False, "error": "Timeout al conectar con el servidor"}
+            elif tool_name == "consultar_reporte":
+                response = await backend.get(
+                    f"{base_path}/agent/report", params=args,
+                )
+            elif tool_name == "consultar_presupuesto":
+                response = await backend.get(
+                    f"{base_path}/agent/budget", params=args,
+                )
+            elif tool_name == "eliminar_gasto":
+                response = await backend.delete(
+                    f"{base_path}/agent/expense", params=args,
+                )
+            elif tool_name == "eliminar_gasto_masivo":
+                response = await backend.delete(
+                    f"{base_path}/agent/expenses/bulk", params=args,
+                )
+            elif tool_name == "modificar_gasto":
+                response = await backend.patch(
+                    f"{base_path}/agent/expense", params=args,
+                )
+            elif tool_name == "fijar_presupuesto":
+                response = await backend.put(
+                    f"{base_path}/agent/budget", params=args,
+                )
+            elif tool_name == "completar_configuracion_inicial":
+                result_msg = await self.complete_first_time(user_phone or "")
+                return {"success": True, "data": {"message": result_msg}}
+            else:
+                return {"success": False, "error": f"Unknown tool: {tool_name}"}
 
-            except Exception as e:
-                logger.error(f"Tool execution failed: {tool_name}", error=str(e))
+            if response.status_code == 200:
+                return {"success": True, "data": response.json()}
+            else:
+                error_text = response.text[:500] if response.text else "No response body"
                 await quality_logger.log_hard_error(
                     tenant_id=tenant_id,
                     category="api_error",
-                    error_message=str(e),
+                    error_message=f"Backend API returned {response.status_code}: {error_text}",
+                    error_code=str(response.status_code),
                     agent_name=self.name,
                     tool_name=tool_name,
                     user_phone=user_phone,
                     message_in=message_in,
-                    severity="high",
-                    exception=e,
+                    severity="high" if response.status_code >= 500 else "medium",
+                    request_payload={"tool_args": args},
                 )
-                return {"success": False, "error": str(e)}
+                return {
+                    "success": False,
+                    "error": error_text,
+                    "status_code": response.status_code,
+                }
+
+        except Exception as e:
+            logger.error(f"Tool execution failed: {tool_name}", error=str(e))
+            await quality_logger.log_hard_error(
+                tenant_id=tenant_id,
+                category="api_error",
+                error_message=str(e),
+                agent_name=self.name,
+                tool_name=tool_name,
+                user_phone=user_phone,
+                message_in=message_in,
+                severity="high",
+                exception=e,
+            )
+            return {"success": False, "error": str(e)}
 
     def _format_tool_result_for_llm(
         self,
