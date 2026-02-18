@@ -4,12 +4,27 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+import httpx
 import structlog
 
 from ..config import get_settings
 from ..services.prompt_loader import PromptLoader
 
 logger = structlog.get_logger()
+
+FIRST_TIME_AGENTS: set[str] = {"finance", "calendar", "reminder", "shopping", "vehicle"}
+
+FIRST_TIME_TOOL_DEFINITION: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "completar_configuracion_inicial",
+        "description": (
+            "Marca la configuración inicial del agente como completada. "
+            "Usar cuando el usuario terminó el setup de primera vez."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+}
 
 
 @dataclass
@@ -47,6 +62,65 @@ class BaseAgent(ABC):
         if self._prompt is None:
             self._prompt = await self.prompt_loader.get_prompt(self.name, tenant_id)
         return self._prompt
+
+    async def check_first_time(self, phone: str) -> bool:
+        """Check if this is the user's first time using this agent.
+
+        Args:
+            phone: The user's phone number.
+
+        Returns:
+            True if first time, False if already onboarded.
+        """
+        if self.name not in FIRST_TIME_AGENTS:
+            return False
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{self.settings.backend_api_url}/api/v1/agent-onboarding/status",
+                    params={"phone": phone, "agent": self.name},
+                    headers={"Authorization": f"Bearer {self.settings.backend_api_key}"},
+                )
+                if resp.status_code == 200:
+                    return resp.json().get("is_first_time", False)
+                logger.warning(
+                    "First-time check failed",
+                    status=resp.status_code,
+                    agent=self.name,
+                )
+                return False
+        except Exception:
+            logger.exception("Error checking first-time status", agent=self.name)
+            return False
+
+    async def complete_first_time(self, phone: str) -> str:
+        """Mark first-time onboarding as complete for this agent.
+
+        Args:
+            phone: The user's phone number.
+
+        Returns:
+            Confirmation message for the LLM tool result.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{self.settings.backend_api_url}/api/v1/agent-onboarding/complete",
+                    json={"phone": phone, "agent_name": self.name},
+                    headers={"Authorization": f"Bearer {self.settings.backend_api_key}"},
+                )
+                if resp.status_code == 200:
+                    return "Configuración inicial completada exitosamente."
+                logger.warning(
+                    "First-time complete failed",
+                    status=resp.status_code,
+                    agent=self.name,
+                )
+                return "No se pudo marcar la configuración como completada."
+        except Exception:
+            logger.exception("Error completing first-time onboarding", agent=self.name)
+            return "Error al completar la configuración inicial."
 
     @abstractmethod
     async def process(

@@ -13,7 +13,7 @@ from openai import AsyncOpenAI
 
 from ..config import get_settings
 from ..services.quality_logger import get_quality_logger
-from .base import AgentResult, BaseAgent
+from .base import FIRST_TIME_TOOL_DEFINITION, AgentResult, BaseAgent
 
 logger = structlog.get_logger()
 
@@ -69,6 +69,17 @@ class FinanceAgent(BaseAgent):
             messages.append({"role": msg.role, "content": msg.content})
 
         messages.append({"role": "user", "content": message})
+
+        # Check first-time use
+        is_first_time = await self.check_first_time(phone)
+        if is_first_time:
+            messages.insert(1, {
+                "role": "system",
+                "content": (
+                    "[PRIMERA_VEZ] Este es el primer uso del usuario con este módulo. "
+                    "Seguí las instrucciones de la sección 'Primera Vez' del prompt."
+                ),
+            })
 
         # Define tools
         tools = [
@@ -197,6 +208,9 @@ class FinanceAgent(BaseAgent):
             },
         ]
 
+        if is_first_time:
+            tools.append(FIRST_TIME_TOOL_DEFINITION)
+
         try:
             total_tokens_in = 0
             total_tokens_out = 0
@@ -269,9 +283,8 @@ class FinanceAgent(BaseAgent):
                     }
                 )
 
-                # consultar_presupuesto: always continue loop so LLM can reason
-                # (e.g. during expense registration: see categories, then ask or register)
-                if tool_name == "consultar_presupuesto":
+                # These tools need LLM follow-up: continue loop so it can reason
+                if tool_name in ("consultar_presupuesto", "completar_configuracion_inicial"):
                     continue
 
                 # Other tools: return formatted response
@@ -387,6 +400,9 @@ class FinanceAgent(BaseAgent):
                         headers=headers,
                         timeout=30.0,
                     )
+                elif tool_name == "completar_configuracion_inicial":
+                    result_msg = await self.complete_first_time(user_phone or "")
+                    return {"success": True, "data": {"message": result_msg}}
                 else:
                     return {"success": False, "error": f"Unknown tool: {tool_name}"}
 

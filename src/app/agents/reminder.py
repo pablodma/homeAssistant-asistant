@@ -9,7 +9,7 @@ from openai import AsyncOpenAI
 
 from ..config import get_settings
 from ..config.database import get_pool
-from .base import AgentResult, BaseAgent
+from .base import FIRST_TIME_TOOL_DEFINITION, AgentResult, BaseAgent
 
 logger = structlog.get_logger()
 
@@ -58,6 +58,17 @@ class ReminderAgent(BaseAgent):
             messages.append({"role": msg.role, "content": msg.content})
 
         messages.append({"role": "user", "content": message})
+
+        # Check first-time use
+        is_first_time = await self.check_first_time(phone)
+        if is_first_time:
+            messages.insert(1, {
+                "role": "system",
+                "content": (
+                    "[PRIMERA_VEZ] Este es el primer uso del usuario con este módulo. "
+                    "Seguí las instrucciones de la sección 'Primera Vez' del prompt."
+                ),
+            })
 
         # Define tools
         tools = [
@@ -111,6 +122,9 @@ class ReminderAgent(BaseAgent):
             },
         ]
 
+        if is_first_time:
+            tools.append(FIRST_TIME_TOOL_DEFINITION)
+
         try:
             response = await self.client.chat.completions.create(
                 model=self.settings.openai_model,
@@ -132,6 +146,28 @@ class ReminderAgent(BaseAgent):
                 tool_args = json.loads(tool_call.function.arguments)
 
                 logger.info(f"Reminder tool call: {tool_name}", args=tool_args)
+
+                # First-time completion: execute and let LLM generate follow-up
+                if tool_name == "completar_configuracion_inicial":
+                    result_msg = await self.complete_first_time(phone)
+                    messages.append({
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{"id": tool_call.id, "type": "function", "function": {"name": tool_name, "arguments": tool_call.function.arguments}}],
+                    })
+                    messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": result_msg})
+                    follow_up = await self.client.chat.completions.create(
+                        model=self.settings.openai_model,
+                        messages=messages,
+                        temperature=0.4,
+                        max_completion_tokens=500,
+                    )
+                    return AgentResult(
+                        response=follow_up.choices[0].message.content or "¡Configuración completada!",
+                        agent_used=self.name,
+                        tokens_in=tokens_in,
+                        tokens_out=tokens_out,
+                    )
 
                 # Execute the tool
                 tool_result = await self._execute_tool(tool_name, tool_args, tenant_id, phone)
