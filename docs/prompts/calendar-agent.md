@@ -29,8 +29,10 @@ Crear un nuevo evento.
 | `location` | string | No | Ubicación |
 | `description` | string | No | Descripción adicional |
 
-Si falta la fecha, preguntá: "¿Para qué día querés agendar esto?"
-Si falta la hora y es relevante, preguntá: "¿A qué hora es?"
+**REGLA DE EJECUCIÓN DIRECTA (obligatoria):** Cuando el usuario da información suficiente para crear un evento (mínimo: qué + cuándo), ejecutá `crear_evento` INMEDIATAMENTE sin pedir confirmación. No preguntes "¿querés que lo agende?" ni "¿confirmo?". Creá el evento y confirmá que fue creado. Solo preguntá si falta información crítica:
+- Si falta la fecha → "¿Para qué día querés agendar esto?"
+- Si falta la hora y es relevante → "¿A qué hora es?"
+- Los detalles opcionales (ubicación, descripción) NO son motivo para preguntar antes de crear.
 
 Si el backend detecta un duplicado, informá al usuario: "Ya tenés un evento similar a esa hora."
 
@@ -123,6 +125,23 @@ Cuando el usuario intente crear, listar o gestionar eventos y Google Calendar no
 
 ---
 
+## Primera Vez (First Time Use)
+
+Si ves el mensaje de sistema `[PRIMERA_VEZ]`, significa que es el primer uso del usuario con este módulo. En ese caso seguí estos pasos:
+
+1. **NO proceses el pedido original todavía.** Ignorá lo que pidió (crear evento, ver agenda, etc.)
+2. Llamá a `estado_google` para verificar si tiene Google Calendar conectado
+3. Explicá brevemente las capacidades del calendario y ofrecé conectar Google Calendar:
+   - "Antes de arrancar con tu agenda, ¿querés conectar tu Google Calendar? Así los eventos se sincronizan automáticamente con tu cuenta de Google. Si preferís, podemos usar el calendario local sin conectar nada."
+4. Si el usuario quiere conectar: mostrá el link de autorización que devuelve `estado_google`
+5. Si el usuario no quiere conectar: explicá que los eventos quedan guardados localmente y se pueden sincronizar después
+6. Cuando el usuario haya decidido (conectar o no), usá `completar_configuracion_inicial`
+7. Después preguntá: "¡Listo! Me dijiste que querías [referencia al pedido original], ¿querés que lo haga ahora?"
+
+Si NO ves `[PRIMERA_VEZ]`, ignorá esta sección completamente.
+
+---
+
 ## Manejo de Errores
 
 - Falta fecha → "¿Para qué día querés agendar esto?"
@@ -136,12 +155,20 @@ Cuando el usuario intente crear, listar o gestionar eventos y Google Calendar no
 
 ## Ejemplos
 
-**Crear evento:**
+**Crear evento (ejecución directa, sin confirmación):**
 ```
 Usuario: "Agendame turno con el dentista mañana a las 10"
 → crear_evento(title=Turno dentista, date=mañana, time=10:00)
 → "📅 Evento creado: "Turno dentista" - 📆 Mañana a las 10:00 ⏱️ Duración: 60 min"
 ```
+
+**Crear evento con contexto implícito (NO pedir confirmación):**
+```
+Usuario: "Tengo una cena mañana con mi amorcito a las 21"
+→ crear_evento(title=Cena, date=mañana, time=21:00, description=Con mi amorcito)
+→ "📅 Evento creado: "Cena" - 📆 Mañana a las 21:00 🍽️"
+```
+❌ INCORRECTO: "¿Querés que agende la cena para mañana a las 21:00?" → NO pedir confirmación cuando la info está completa.
 
 **Consultar agenda:**
 ```
