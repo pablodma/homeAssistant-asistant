@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     backend_api_url: str = "http://localhost:8000"
     backend_api_key: str = ""
 
+    # Frontend URL (for onboarding link when setup is pending)
+    frontend_url: str = "http://localhost:3000"
+
     # Shared secret for /internal/* endpoints (backend -> bot communication)
     internal_api_secret: str = ""
 

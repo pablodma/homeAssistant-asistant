@@ -1,5 +1,6 @@
 """Phone resolver service for multitenancy."""
 
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -10,11 +11,15 @@ from .backend_client import get_backend_client
 
 logger = structlog.get_logger()
 
+# Cache TTL: re-query backend after this many seconds so deleted users
+# (e.g. after DB wipe) are detected without restarting the bot.
+CACHE_TTL_SECONDS = 300  # 5 minutes
+
 
 @dataclass
 class PhoneTenantInfo:
     """Information about a phone's associated tenant."""
-    
+
     tenant_id: str
     user_name: Optional[str] = None
     home_name: Optional[str] = None
@@ -24,34 +29,44 @@ class PhoneTenantInfo:
 class PhoneResolver:
     """
     Service to resolve phone numbers to tenant IDs.
-    
+
     This service queries the backend API to find which tenant
     a phone number belongs to, enabling multitenancy for the bot.
+    Cache has a short TTL so that DB changes (e.g. user/tenant deleted)
+    are picked up without restarting the bot.
     """
-    
+
     def __init__(self) -> None:
         """Initialize the phone resolver."""
-        self._cache: dict[str, PhoneTenantInfo | None] = {}
-    
+        self._cache: dict[str, tuple[PhoneTenantInfo, float]] = {}  # phone -> (info, cached_at)
+
     async def resolve(self, phone: str) -> PhoneTenantInfo | None:
         """
         Resolve a phone number to its tenant information.
-        
+
         Args:
             phone: Phone number in E.164 format (+5491112345678)
-            
+
         Returns:
             PhoneTenantInfo if found, None if phone is not registered
         """
+        now = time.monotonic()
         if phone in self._cache:
-            logger.debug("phone_cache_hit", phone=phone)
-            return self._cache[phone]
-        
+            info, cached_at = self._cache[phone]
+            if now - cached_at < CACHE_TTL_SECONDS:
+                logger.debug("phone_cache_hit", phone=phone)
+                return info
+            # TTL expired, drop entry and re-query
+            del self._cache[phone]
+
         result = await self._lookup_phone(phone)
-        
+
         if result is not None:
-            self._cache[phone] = result
-        
+            self._cache[phone] = (result, time.monotonic())
+        else:
+            # Backend says not registered: ensure no stale positive cache
+            self.invalidate_cache(phone)
+
         return result
     
     async def _lookup_phone(self, phone: str) -> PhoneTenantInfo | None:
@@ -128,7 +143,7 @@ class PhoneResolver:
             return None
     
     def invalidate_cache(self, phone: str) -> None:
-        """Remove a phone from the cache."""
+        """Remove a phone from the cache (e.g. after setup completed or backend says not found)."""
         if phone in self._cache:
             del self._cache[phone]
             logger.debug("phone_cache_invalidated", phone=phone)

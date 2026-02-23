@@ -13,13 +13,13 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, R
 
 from ..config import get_settings
 from ..agents.router import RouterAgent
-from ..agents.subscription import SubscriptionAgent
 from ..agents.qa import QAAgent
 from ..services.conversation import ConversationService
 from ..services.interaction_log import InteractionLogger
 from ..services.input_guard import sanitize_message
 from ..services.output_guard import check_response
 from ..services.quality_logger import get_quality_logger
+from ..services.backend_client import get_backend_client
 from ..services.phone_resolver import get_phone_resolver
 from ..services.transcription import get_transcription_service
 from .client import get_whatsapp_client
@@ -409,121 +409,44 @@ async def _handle_setup_user(
     phone_info,
     whatsapp,
 ) -> None:
-    """Handle messages from registered users with pending setup (onboarding_completed=false).
+    """Redirect users with pending setup to web onboarding.
 
-    Invokes the SubscriptionAgent in setup mode to collect home_name
-    and optionally invite members after payment.
+    Sends a single message with link to complete home configuration on the web.
+    No SubscriptionAgent or conversational setup.
     """
     try:
-        import time
+        settings = get_settings()
+        url = f"{settings.frontend_url.rstrip('/')}/onboarding"
+        text = (
+            f"Tu pago está confirmado. Completá la configuración de tu hogar acá: {url} "
+            "Cuando termines, volvé a escribirme."
+        )
+        await whatsapp.send_text(message.phone, text)
 
-        start_time = time.time()
-        tenant_id = phone_info.tenant_id
-        conversation_service = ConversationService()
         interaction_logger = InteractionLogger()
-
-        # Get or create session with real tenant_id
-        await conversation_service.get_or_create(
-            phone=message.phone,
-            tenant_id=tenant_id,
-        )
-
-        # Load conversation history
-        history = await conversation_service.get_history(
-            phone=message.phone,
-            tenant_id=tenant_id,
-            limit=10,
-        )
-        # #region agent log
-        import json as _dbg_json; open(r"d:\Proyectos\homeAsiss\.cursor\debug.log", "a", encoding="utf-8").write(_dbg_json.dumps({"timestamp": __import__("time").time(), "location": "webhook.py:432", "message": "setup_history", "data": {"phone": message.phone, "tenant_id": tenant_id, "history_count": len(history), "history_preview": [{"role": h.role, "content": h.content[:60]} for h in history[-3:]]}, "hypothesisId": "H4"}) + "\n")
-        # #endregion
-
-        # Process through SubscriptionAgent in setup mode
-        subscription_agent = SubscriptionAgent()
-        result = await subscription_agent.process(
-            message=message.text,
-            phone=message.phone,
-            tenant_id=tenant_id,
-            history=history,
-            mode="setup",
-            contact_name=message.contact_name,
-        )
-
-        # Send response
-        await whatsapp.send_text(message.phone, result.response)
-
-        # Save conversation history
-        await conversation_service.add_message(
-            phone=message.phone,
-            tenant_id=tenant_id,
-            role="user",
-            content=message.text,
-        )
-        await conversation_service.add_message(
-            phone=message.phone,
-            tenant_id=tenant_id,
-            role="assistant",
-            content=result.response,
-        )
-
-        # Log interaction
-        response_time_ms = int((time.time() - start_time) * 1000)
-        interaction_metadata = result.metadata or {}
-        interaction_metadata["mode"] = "setup"
-        interaction_id = await interaction_logger.log(
-            tenant_id=tenant_id,
+        await interaction_logger.log(
+            tenant_id=phone_info.tenant_id,
             user_phone=message.phone,
             user_name=phone_info.user_name or message.contact_name,
-            message_in=message.text,
-            message_out=result.response,
-            agent_used=result.agent_used,
-            tokens_in=result.tokens_in,
-            tokens_out=result.tokens_out,
-            response_time_ms=response_time_ms,
-            metadata=interaction_metadata,
+            message_in=message.text or "",
+            message_out=text,
+            agent_used="web_onboarding_redirect",
+            tokens_in=0,
+            tokens_out=0,
+            response_time_ms=0,
+            metadata={"mode": "setup_redirect"},
         )
-
         logger.info(
-            "Setup user message processed",
+            "Setup-pending user redirected to web onboarding",
             phone=message.phone,
-            tenant_id=tenant_id,
-            agent_used=result.agent_used,
-            response_time_ms=response_time_ms,
+            tenant_id=phone_info.tenant_id,
         )
-
-        # Run QA analysis
-        if interaction_id:
-            asyncio.create_task(
-                _run_qa_analysis(
-                    interaction_id=interaction_id,
-                    tenant_id=tenant_id,
-                    user_phone=message.phone,
-                    message_in=message.text,
-                    message_out=result.response,
-                    agent_name=result.sub_agent_used or result.agent_used,
-                    metadata=interaction_metadata,
-                )
-            )
-
     except Exception as e:
         logger.error(
-            "Error handling setup user",
+            "Error redirecting setup user to web",
             phone=message.phone,
             error=str(e),
         )
-
-        quality_logger = get_quality_logger()
-        await quality_logger.log_hard_error(
-            tenant_id=phone_info.tenant_id,
-            category="agent_error",
-            error_message=str(e),
-            user_phone=message.phone,
-            agent_name="subscription",
-            message_in=message.text,
-            severity="high",
-            exception=e,
-        )
-
         try:
             await whatsapp.send_text(
                 message.phone,
@@ -537,119 +460,58 @@ async def _handle_unregistered_user(
     message: IncomingMessage,
     whatsapp,
 ) -> None:
-    """Handle messages from unregistered users via SubscriptionAgent.
+    """Redirect unregistered users to web onboarding.
 
-    Invokes the SubscriptionAgent in acquisition mode (no tenant_id).
-    Manages conversation memory keyed by phone number.
-    Logs interaction for admin visibility.
-    Runs QA analysis so errors are visible in the admin panel.
+    Calls backend to get a signed onboarding URL, then sends a single message
+    with the link. No SubscriptionAgent or conversational onboarding.
     """
     try:
-        import time
+        backend = get_backend_client()
+        response = await backend.post(
+            "/api/v1/onboarding/web-link",
+            json={"phone": message.phone},
+            timeout=15.0,
+        )
+        data = response.json() if response.content else {}
 
-        start_time = time.time()
-        conversation_service = ConversationService()
+        if response.status_code == 200 and data.get("url"):
+            name = (message.contact_name or "").strip() or None
+            greeting = f"Hola {name}! 👋" if name else "Hola! 👋"
+            text = (
+                f"{greeting} HomeAI pone tu hogar en un solo lugar: gastos, agenda, "
+                "listas y recordatorios, todo por WhatsApp. Sin apps ni planillas.\n\n"
+                f"Para activarlo, completá tu registro acá: {data['url']}\n\n"
+                "Cuando termines, volvé a escribirme."
+            )
+        elif data.get("already_registered"):
+            text = "Este número ya está registrado en otro hogar. Si tenés problemas para ingresar, contactá soporte."
+        else:
+            text = "Algo falló; intentá más tarde o contactá soporte."
+
+        await whatsapp.send_text(message.phone, text)
+
+        # Log for admin visibility (no tenant)
         interaction_logger = InteractionLogger()
-        quality_logger = get_quality_logger()
-
-        # Get or create onboarding session (no tenant_id)
-        await conversation_service.get_or_create(
-            phone=message.phone,
-            tenant_id="",
-        )
-
-        # Load conversation history for onboarding
-        history = await conversation_service.get_history(
-            phone=message.phone,
-            tenant_id="",
-            limit=10,
-        )
-
-        # Process through SubscriptionAgent in acquisition mode
-        subscription_agent = SubscriptionAgent()
-        result = await subscription_agent.process(
-            message=message.text,
-            phone=message.phone,
-            tenant_id="",  # Empty = acquisition mode
-            history=history,
-            contact_name=message.contact_name,
-        )
-
-        # Send response
-        await whatsapp.send_text(message.phone, result.response)
-
-        # Save conversation history
-        await conversation_service.add_message(
-            phone=message.phone,
-            tenant_id="",
-            role="user",
-            content=message.text,
-        )
-        await conversation_service.add_message(
-            phone=message.phone,
-            tenant_id="",
-            role="assistant",
-            content=result.response,
-        )
-
-        # Log interaction for admin panel visibility
-        response_time_ms = int((time.time() - start_time) * 1000)
-        interaction_metadata = result.metadata or {}
-        interaction_metadata["mode"] = "acquisition"
-        interaction_id = await interaction_logger.log(
-            tenant_id=None,  # No tenant in acquisition mode
+        await interaction_logger.log(
+            tenant_id=None,
             user_phone=message.phone,
             user_name=message.contact_name,
-            message_in=message.text,
-            message_out=result.response,
-            agent_used=result.agent_used,
-            tokens_in=result.tokens_in,
-            tokens_out=result.tokens_out,
-            response_time_ms=response_time_ms,
-            metadata=interaction_metadata,
+            message_in=message.text or "",
+            message_out=text,
+            agent_used="web_onboarding_redirect",
+            tokens_in=0,
+            tokens_out=0,
+            response_time_ms=0,
+            metadata={"mode": "unregistered_redirect"},
         )
-
-        logger.info(
-            "Unregistered user message processed",
-            phone=message.phone,
-            agent_used=result.agent_used,
-            response_time_ms=response_time_ms,
-        )
-
-        # Run QA analysis (fire and forget) — None tenant for onboarding
-        if interaction_id:
-            asyncio.create_task(
-                _run_qa_analysis(
-                    interaction_id=interaction_id,
-                    tenant_id=None,
-                    user_phone=message.phone,
-                    message_in=message.text,
-                    message_out=result.response,
-                    agent_name=result.sub_agent_used or result.agent_used,
-                    metadata=interaction_metadata,
-                )
-            )
+        logger.info("Unregistered user redirected to web onboarding", phone=message.phone)
 
     except Exception as e:
         logger.error(
-            "Error handling unregistered user",
+            "Error redirecting unregistered user to web",
             phone=message.phone,
             error=str(e),
         )
-
-        # Log hard error for admin visibility (None tenant = onboarding)
-        quality_logger = get_quality_logger()
-        await quality_logger.log_hard_error(
-            tenant_id=None,
-            category="agent_error",
-            error_message=str(e),
-            user_phone=message.phone,
-            agent_name="subscription",
-            message_in=message.text,
-            severity="high",
-            exception=e,
-        )
-
         try:
             await whatsapp.send_text(
                 message.phone,
