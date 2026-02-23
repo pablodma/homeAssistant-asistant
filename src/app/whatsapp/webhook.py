@@ -489,10 +489,12 @@ async def _handle_unregistered_user(
     _debug_log("handle_unregistered_start", {"phone": message.phone}, "H1")
     # #endregion
     try:
+        # Backend expects E.164 with leading '+' (WebLinkRequest validator)
+        phone_e164 = message.phone if message.phone.startswith("+") else f"+{message.phone}"
         backend = get_backend_client()
         response = await backend.post(
             "/api/v1/onboarding/web-link",
-            json={"phone": message.phone},
+            json={"phone": phone_e164},
             timeout=15.0,
         )
         data = response.json() if response.content else {}
