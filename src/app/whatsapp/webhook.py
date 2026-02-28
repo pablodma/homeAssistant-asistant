@@ -5,22 +5,47 @@ This webhook only routes messages and sends responses.
 """
 
 import asyncio
+import hashlib
+import hmac
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
 
 from ..config import get_settings
 from ..agents.router import RouterAgent
 from ..agents.qa import QAAgent
 from ..services.conversation import ConversationService
 from ..services.interaction_log import InteractionLogger
+from ..services.input_guard import sanitize_message
+from ..services.output_guard import check_response
 from ..services.quality_logger import get_quality_logger
+from ..services.backend_client import get_backend_client
 from ..services.phone_resolver import get_phone_resolver
+from ..services.transcription import get_transcription_service
 from .client import get_whatsapp_client
 from .types import IncomingMessage, WhatsAppWebhookPayload
 
 logger = structlog.get_logger()
 router = APIRouter(tags=["WhatsApp Webhook"])
+
+# Per-phone rate limiter (in-memory, resets on restart)
+_rate_limit_store: dict[str, list[float]] = {}
+
+
+def _is_rate_limited(phone: str, max_per_minute: int = 20) -> bool:
+    """Check if a phone number has exceeded the rate limit."""
+    import time
+
+    now = time.time()
+    window = 60.0
+
+    timestamps = _rate_limit_store.get(phone, [])
+    timestamps = [t for t in timestamps if now - t < window]
+    timestamps.append(now)
+    _rate_limit_store[phone] = timestamps
+
+    return len(timestamps) > max_per_minute
+
 
 # QA Agent singleton
 _qa_agent: QAAgent | None = None
@@ -61,6 +86,16 @@ async def verify_webhook(
     return Response(content="Verification failed", status_code=403)
 
 
+def _verify_webhook_signature(payload: bytes, signature_header: str, app_secret: str) -> bool:
+    """Verify Meta's X-Hub-Signature-256 HMAC signature."""
+    expected = hmac.new(
+        app_secret.encode(),
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(f"sha256={expected}", signature_header)
+
+
 @router.post("/webhook")
 async def receive_webhook(
     request: Request,
@@ -72,8 +107,23 @@ async def receive_webhook(
     and processes them in the background.
     """
     try:
-        body = await request.json()
-        logger.debug("Webhook received", body=body)
+        settings = get_settings()
+        raw_body = await request.body()
+
+        if settings.whatsapp_app_secret:
+            signature = request.headers.get("x-hub-signature-256", "")
+            if not signature or not _verify_webhook_signature(
+                raw_body, signature, settings.whatsapp_app_secret
+            ):
+                logger.warning("Invalid webhook signature")
+                raise HTTPException(status_code=401, detail="Invalid signature")
+        elif settings.is_production:
+            logger.error("WHATSAPP_APP_SECRET not configured in production")
+            raise HTTPException(status_code=500, detail="Webhook verification not configured")
+
+        import json
+        body = json.loads(raw_body)
+        logger.debug("Webhook received")
 
         # Parse webhook payload
         payload = WhatsAppWebhookPayload.model_validate(body)
@@ -86,6 +136,15 @@ async def receive_webhook(
                     for message in change.value.messages:
                         # Handle text messages
                         if message.type == "text" and message.text:
+                            contact = None
+                            if change.value.contacts:
+                                contact = change.value.contacts[0]
+
+                            incoming = IncomingMessage.from_webhook(message, contact)
+                            background_tasks.add_task(process_message, incoming)
+
+                        # Handle audio/voice messages
+                        elif message.type == "audio" and message.audio:
                             contact = None
                             if change.value.contacts:
                                 contact = change.value.contacts[0]
@@ -118,7 +177,6 @@ async def process_message(message: IncomingMessage) -> None:
     import time
 
     start_time = time.time()
-    settings = get_settings()
     whatsapp = get_whatsapp_client()
     quality_logger = get_quality_logger()
 
@@ -126,28 +184,86 @@ async def process_message(message: IncomingMessage) -> None:
     tenant_id: str | None = None
     agent_used: str | None = None
 
+    settings = get_settings()
+    if _is_rate_limited(message.phone, settings.max_messages_per_minute):
+        logger.warning("Rate limited", phone=message.phone)
+        whatsapp = get_whatsapp_client()
+        await whatsapp.send_text(
+            message.phone,
+            "Estás enviando mensajes muy rápido. Esperá un momento e intentá de nuevo.",
+        )
+        return
+
     logger.info(
         "Processing message",
         phone=message.phone,
-        text=message.text[:50] + "..." if len(message.text) > 50 else message.text,
+        is_audio=message.is_audio,
+        text=message.text[:50] + "..." if message.text and len(message.text) > 50 else message.text,
     )
 
     try:
         # Mark message as read and show typing indicator
         await whatsapp.mark_as_read_and_typing(message.message_id)
 
+        # Transcribe audio messages before processing
+        if message.is_audio and message.audio_media_id:
+            try:
+                audio_bytes, content_type = await whatsapp.download_media(
+                    message.audio_media_id
+                )
+                transcription_service = get_transcription_service()
+                transcribed_text = await transcription_service.transcribe(
+                    audio_bytes, content_type
+                )
+
+                if not transcribed_text:
+                    await whatsapp.send_text(
+                        message.phone,
+                        "No pude entender el audio. ¿Podrías repetirlo o enviarlo como texto? 🎙️",
+                    )
+                    return
+
+                # Replace empty text with transcription
+                message = message.model_copy(update={"text": transcribed_text})
+                logger.info(
+                    "Audio transcribed for processing",
+                    phone=message.phone,
+                    transcribed_text=transcribed_text[:80],
+                )
+
+            except Exception as e:
+                logger.error(
+                    "Audio processing failed",
+                    phone=message.phone,
+                    error=str(e),
+                )
+                await whatsapp.send_text(
+                    message.phone,
+                    "No pude procesar tu audio. Por favor, intentá de nuevo o enviá un mensaje de texto. 🎙️",
+                )
+                return
+
+        # Input guard: sanitize and flag injection attempts
+        guard_result = sanitize_message(message.text or "")
+        message = message.model_copy(update={"text": guard_result.text})
+
         # Resolve tenant by phone number
         phone_resolver = get_phone_resolver()
         phone_info = await phone_resolver.resolve(message.phone)
 
         if not phone_info:
-            # Phone not registered - send registration message
-            logger.info("unregistered_phone", phone=message.phone)
-            await whatsapp.send_text(
-                message.phone,
-                "¡Hola! 👋 Para usar HomeAI necesitás registrar tu número primero.\n\n"
-                "Visitá https://home-assistant-frontend-brown.vercel.app para crear tu cuenta y vincular tu WhatsApp.",
+            logger.info("unregistered_phone_onboarding", phone=message.phone)
+            await _handle_unregistered_user(message, whatsapp)
+            return
+
+        if not phone_info.onboarding_completed:
+            logger.info(
+                "setup_pending",
+                phone=message.phone,
+                tenant_id=phone_info.tenant_id,
             )
+            phone_resolver.invalidate_cache(message.phone)
+            await _handle_setup_user(message, phone_info, whatsapp)
             return
 
         tenant_id = phone_info.tenant_id
@@ -189,8 +305,11 @@ async def process_message(message: IncomingMessage) -> None:
 
         agent_used = result.agent_used
 
-        # Send response (always text - prompt handles conversational flows)
-        await whatsapp.send_text(message.phone, result.response)
+        # Output guard: check for prompt leakage, sensitive data, length
+        output_check = check_response(result.response, agent_name=result.sub_agent_used or result.agent_used)
+        response_text = output_check.text
+
+        await whatsapp.send_text(message.phone, response_text)
 
         # Save to conversation history
         await conversation_service.add_message(
@@ -203,23 +322,32 @@ async def process_message(message: IncomingMessage) -> None:
             phone=message.phone,
             tenant_id=tenant_id,
             role="assistant",
-            content=result.response,
+            content=response_text,
         )
 
         # Log interaction and get ID for QA
         response_time_ms = int((time.time() - start_time) * 1000)
+        interaction_metadata = result.metadata or {}
+        if message.is_audio:
+            interaction_metadata["input_type"] = "audio"
+        if guard_result.injection_suspected:
+            interaction_metadata["injection_suspected"] = True
+            interaction_metadata["injection_patterns"] = guard_result.matched_patterns
+        if output_check.was_modified:
+            interaction_metadata["output_guard_modified"] = True
+            interaction_metadata["output_guard_leak"] = output_check.leak_detected
         interaction_id = await interaction_logger.log(
             tenant_id=tenant_id,
             user_phone=message.phone,
             user_name=user_name,
             message_in=message.text,
-            message_out=result.response,
+            message_out=response_text,
             agent_used=result.agent_used,
             sub_agent_used=result.sub_agent_used,
             tokens_in=result.tokens_in,
             tokens_out=result.tokens_out,
             response_time_ms=response_time_ms,
-            metadata=result.metadata,
+            metadata=interaction_metadata,
         )
 
         logger.info(
@@ -239,9 +367,9 @@ async def process_message(message: IncomingMessage) -> None:
                     tenant_id=tenant_id,
                     user_phone=message.phone,
                     message_in=message.text,
-                    message_out=result.response,
+                    message_out=response_text,
                     agent_name=result.sub_agent_used or result.agent_used,
-                    metadata=result.metadata,
+                    metadata=interaction_metadata,
                 )
             )
 
@@ -276,9 +404,128 @@ async def process_message(message: IncomingMessage) -> None:
             logger.error("Failed to send error message to user")
 
 
+async def _handle_setup_user(
+    message: IncomingMessage,
+    phone_info,
+    whatsapp,
+) -> None:
+    """Redirect users with pending setup to web onboarding.
+
+    Sends a single message with link to complete home configuration on the web.
+    No SubscriptionAgent or conversational setup.
+    """
+    try:
+        settings = get_settings()
+        url = f"{settings.frontend_url.rstrip('/')}/onboarding"
+        text = (
+            f"Tu pago está confirmado. Completá la configuración de tu hogar acá: {url} "
+            "Cuando termines, volvé a escribirme."
+        )
+        await whatsapp.send_text(message.phone, text)
+
+        interaction_logger = InteractionLogger()
+        await interaction_logger.log(
+            tenant_id=phone_info.tenant_id,
+            user_phone=message.phone,
+            user_name=phone_info.user_name or message.contact_name,
+            message_in=message.text or "",
+            message_out=text,
+            agent_used="web_onboarding_redirect",
+            tokens_in=0,
+            tokens_out=0,
+            response_time_ms=0,
+            metadata={"mode": "setup_redirect"},
+        )
+        logger.info(
+            "Setup-pending user redirected to web onboarding",
+            phone=message.phone,
+            tenant_id=phone_info.tenant_id,
+        )
+    except Exception as e:
+        logger.error(
+            "Error redirecting setup user to web",
+            phone=message.phone,
+            error=str(e),
+        )
+        try:
+            await whatsapp.send_text(
+                message.phone,
+                "Hubo un problema. Por favor, intentá de nuevo en unos segundos.",
+            )
+        except Exception:
+            logger.error("Failed to send error message to setup user")
+
+
+async def _handle_unregistered_user(
+    message: IncomingMessage,
+    whatsapp,
+) -> None:
+    """Redirect unregistered users to web onboarding.
+
+    Calls backend to get a signed onboarding URL, then sends a single message
+    with the link. No SubscriptionAgent or conversational onboarding.
+    """
+    try:
+        # Backend expects E.164 with leading '+' (WebLinkRequest validator)
+        phone_e164 = message.phone if message.phone.startswith("+") else f"+{message.phone}"
+        backend = get_backend_client()
+        response = await backend.post(
+            "/api/v1/onboarding/web-link",
+            json={"phone": phone_e164},
+            timeout=15.0,
+        )
+        data = response.json() if response.content else {}
+
+        if response.status_code == 200 and data.get("url"):
+            name = (message.contact_name or "").strip() or None
+            greeting = f"Hola {name}! 👋" if name else "Hola! 👋"
+            text = (
+                f"{greeting} HomeAI pone tu hogar en un solo lugar: gastos, agenda, "
+                "listas y recordatorios, todo por WhatsApp. Sin apps ni planillas.\n\n"
+                f"Para activarlo, completá tu registro acá: {data['url']}\n\n"
+                "Cuando termines, volvé a escribirme."
+            )
+        elif data.get("already_registered"):
+            text = "Este número ya está registrado en otro hogar. Si tenés problemas para ingresar, contactá soporte."
+        else:
+            text = "Algo falló; intentá más tarde o contactá soporte."
+
+        await whatsapp.send_text(message.phone, text)
+
+        # Log for admin visibility (no tenant)
+        interaction_logger = InteractionLogger()
+        await interaction_logger.log(
+            tenant_id=None,
+            user_phone=message.phone,
+            user_name=message.contact_name,
+            message_in=message.text or "",
+            message_out=text,
+            agent_used="web_onboarding_redirect",
+            tokens_in=0,
+            tokens_out=0,
+            response_time_ms=0,
+            metadata={"mode": "unregistered_redirect"},
+        )
+        logger.info("Unregistered user redirected to web onboarding", phone=message.phone)
+
+    except Exception as e:
+        logger.error(
+            "Error redirecting unregistered user to web",
+            phone=message.phone,
+            error=str(e),
+        )
+        try:
+            await whatsapp.send_text(
+                message.phone,
+                "Hubo un problema. Por favor, intentá de nuevo en unos segundos.",
+            )
+        except Exception:
+            logger.error("Failed to send error message to unregistered user")
+
+
 async def _run_qa_analysis(
     interaction_id: str,
-    tenant_id: str,
+    tenant_id: str | None,
     user_phone: str,
     message_in: str,
     message_out: str,
