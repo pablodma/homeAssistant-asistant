@@ -7,9 +7,6 @@ This webhook only routes messages and sends responses.
 import asyncio
 import hashlib
 import hmac
-import json
-import time
-from pathlib import Path
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
@@ -30,20 +27,6 @@ from .types import IncomingMessage, WhatsAppWebhookPayload
 
 logger = structlog.get_logger()
 router = APIRouter(tags=["WhatsApp Webhook"])
-
-# #region agent log
-def _debug_log(message: str, data: dict, hypothesis_id: str = ""):
-    payload = {"sessionId": "fa6a62", "location": "webhook.py", "message": message, "data": data, "timestamp": int(time.time() * 1000)}
-    if hypothesis_id:
-        payload["hypothesisId"] = hypothesis_id
-    logger.info("debug_fa6a62", **payload)
-    try:
-        log_path = Path(__file__).resolve().parents[4] / "debug-fa6a62.log"
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-# #endregion
 
 # Per-phone rate limiter (in-memory, resets on restart)
 _rate_limit_store: dict[str, list[float]] = {}
@@ -270,9 +253,6 @@ async def process_message(message: IncomingMessage) -> None:
 
         if not phone_info:
             logger.info("unregistered_phone_onboarding", phone=message.phone)
-            # #region agent log
-            _debug_log("unregistered_flow", {"phone": message.phone, "phone_info_none": True}, "H4")
-            # #endregion
             await _handle_unregistered_user(message, whatsapp)
             return
 
@@ -485,9 +465,6 @@ async def _handle_unregistered_user(
     Calls backend to get a signed onboarding URL, then sends a single message
     with the link. No SubscriptionAgent or conversational onboarding.
     """
-    # #region agent log
-    _debug_log("handle_unregistered_start", {"phone": message.phone}, "H1")
-    # #endregion
     try:
         # Backend expects E.164 with leading '+' (WebLinkRequest validator)
         phone_e164 = message.phone if message.phone.startswith("+") else f"+{message.phone}"
@@ -498,18 +475,6 @@ async def _handle_unregistered_user(
             timeout=15.0,
         )
         data = response.json() if response.content else {}
-        # #region agent log
-        _debug_log(
-            "web_link_response",
-            {
-                "status_code": response.status_code,
-                "has_url": bool(data.get("url")),
-                "already_registered": bool(data.get("already_registered")),
-                "data_keys": list(data.keys()) if isinstance(data, dict) else [],
-            },
-            "H1",
-        )
-        # #endregion
 
         if response.status_code == 200 and data.get("url"):
             name = (message.contact_name or "").strip() or None
@@ -523,13 +488,6 @@ async def _handle_unregistered_user(
         elif data.get("already_registered"):
             text = "Este número ya está registrado en otro hogar. Si tenés problemas para ingresar, contactá soporte."
         else:
-            # #region agent log
-            _debug_log(
-                "sending_algo_fallo",
-                {"status_code": response.status_code, "has_url": bool(data.get("url")), "already_registered": bool(data.get("already_registered"))},
-                "H2",
-            )
-            # #endregion
             text = "Algo falló; intentá más tarde o contactá soporte."
 
         await whatsapp.send_text(message.phone, text)
@@ -551,9 +509,6 @@ async def _handle_unregistered_user(
         logger.info("Unregistered user redirected to web onboarding", phone=message.phone)
 
     except Exception as e:
-        # #region agent log
-        _debug_log("handle_unregistered_error", {"error": str(e), "error_type": type(e).__name__}, "H3")
-        # #endregion
         logger.error(
             "Error redirecting unregistered user to web",
             phone=message.phone,
