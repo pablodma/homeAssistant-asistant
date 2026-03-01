@@ -7,6 +7,7 @@ This webhook only routes messages and sends responses.
 import asyncio
 import hashlib
 import hmac
+from urllib.parse import urlsplit, urlunsplit
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
@@ -38,6 +39,8 @@ router = APIRouter(tags=["WhatsApp Webhook"])
 _rate_limit_store: dict[str, list[float]] = {}
 ACCESS_WEB_BUTTON_ID = "access_open_web"
 ACCESS_WEB_BUTTON_TITLE = "ir a la web"
+PRODUCTION_FRONTEND_URL = "https://aira-home.io"
+DEVELOPMENT_FRONTEND_URL = "https://dev.aira-home.io"
 
 
 def _is_rate_limited(phone: str, max_per_minute: int = 20) -> bool:
@@ -531,24 +534,38 @@ async def process_message(message: IncomingMessage) -> None:
             logger.error("Failed to send error message to user")
 
 
-async def _send_redirect_with_web_button(
-    whatsapp,
-    phone: str,
-    text: str,
-    cta_url: str,
-) -> None:
-    """Send a single interactive message with text + web quick action button."""
-    sent = await whatsapp.send_interactive_buttons(
-        phone=phone,
-        body=text,
-        buttons=[{"id": ACCESS_WEB_BUTTON_ID, "title": "Ir a la web"}],
-    )
-    if sent:
-        return
+def _frontend_base_url(settings) -> str:
+    """Return canonical frontend domain by environment."""
+    if getattr(settings, "is_production", False):
+        return PRODUCTION_FRONTEND_URL
+    return DEVELOPMENT_FRONTEND_URL
 
-    logger.warning("failed_to_send_redirect_button", phone=phone)
-    fallback_text = f"{text}\n\nSi no ves el botón, abrí este enlace: {cta_url}"
-    await whatsapp.send_text(phone, fallback_text)
+
+def _frontend_url(settings, path: str) -> str:
+    """Build frontend URL using canonical environment domain."""
+    base = _frontend_base_url(settings).rstrip("/")
+    normalized_path = "/" + path.lstrip("/")
+    return f"{base}{normalized_path}"
+
+
+def _force_frontend_domain(settings, url: str) -> str:
+    """Keep path/query from URL but force canonical frontend domain."""
+    target_parts = urlsplit(_frontend_base_url(settings))
+    parsed = urlsplit(url)
+
+    path = parsed.path or "/"
+    if not path.startswith("/"):
+        path = f"/{path}"
+
+    return urlunsplit(
+        (
+            target_parts.scheme,
+            target_parts.netloc,
+            path,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
 
 
 async def _fetch_unregistered_onboarding_url(phone: str) -> tuple[str | None, bool]:
@@ -587,21 +604,22 @@ async def _handle_access_web_button_click(
                 text = "Este número ya está registrado en otro hogar. Si tenés problemas para ingresar, contactá soporte."
                 mode = "access_button_already_registered"
             elif url:
+                url = _force_frontend_domain(settings, url)
                 text = f"Abrí la web desde acá:\n{url}"
                 mode = "access_button_unregistered"
             else:
                 text = "No pude generar el acceso web ahora. Intentá de nuevo en unos segundos."
                 mode = "access_button_failed"
         elif not phone_info.onboarding_completed:
-            url = f"{settings.frontend_url.rstrip('/')}/onboarding"
+            url = _frontend_url(settings, "/onboarding")
             text = f"Abrí la web desde acá:\n{url}"
             mode = "access_button_setup"
         elif not phone_info.has_active_subscription:
-            url = f"{settings.frontend_url.rstrip('/')}/contratar"
+            url = _frontend_url(settings, "/contratar")
             text = f"Abrí la web desde acá:\n{url}"
             mode = "access_button_subscription"
         else:
-            url = f"{settings.frontend_url.rstrip('/')}/dashboard"
+            url = _frontend_url(settings, "/dashboard")
             text = f"Ya tenés acceso habilitado. Si querés, entrá acá:\n{url}"
             mode = "access_button_authorized"
 
@@ -644,17 +662,13 @@ async def _handle_setup_user(
     """
     try:
         settings = get_settings()
-        url = f"{settings.frontend_url.rstrip('/')}/onboarding"
+        url = _frontend_url(settings, "/onboarding")
         text = (
-            "Tu pago está confirmado. Completá la configuración de tu hogar tocando el botón de abajo.\n\n"
+            "Tu pago está confirmado. Completá la configuración de tu hogar en la web:\n"
+            f"{url}\n\n"
             "Cuando termines, volvé a escribirme."
         )
-        await _send_redirect_with_web_button(
-            whatsapp=whatsapp,
-            phone=message.phone,
-            text=text,
-            cta_url=url,
-        )
+        await whatsapp.send_text(message.phone, text)
 
         interaction_logger = InteractionLogger()
         await interaction_logger.log(
@@ -670,7 +684,7 @@ async def _handle_setup_user(
             metadata={
                 "mode": "setup_redirect",
                 "cta_url": url,
-                "quick_actions_offered": [ACCESS_WEB_BUTTON_ID],
+                "quick_actions_offered": [],
             },
         )
         logger.info(
@@ -701,27 +715,24 @@ async def _handle_subscription_required_user(
     """Block agent interaction when subscription is not authorized."""
     try:
         settings = get_settings()
-        subscribe_url = f"{settings.frontend_url.rstrip('/')}/contratar"
+        subscribe_url = _frontend_url(settings, "/contratar")
 
         if phone_info.subscription_status == "pending":
             text = (
                 f"Tu pago todavía está pendiente. Cuando se confirme, vas a poder usar Aira. "
-                "Si necesitás reintentar, ingresá a la web tocando el botón de abajo.\n\n"
+                "Si necesitás reintentar, ingresá a la web:\n"
+                f"{subscribe_url}\n\n"
                 "Cuando termines, volvé a escribirme."
             )
         else:
             text = (
                 f"Para seguir usando Aira necesitás una suscripción activa. "
-                "Para empezar o conocer más, ingresá a la web tocando el botón de abajo.\n\n"
+                "Para empezar o conocer más, ingresá a la web:\n"
+                f"{subscribe_url}\n\n"
                 "Cuando termines, volvé a escribirme."
             )
 
-        await _send_redirect_with_web_button(
-            whatsapp=whatsapp,
-            phone=message.phone,
-            text=text,
-            cta_url=subscribe_url,
-        )
+        await whatsapp.send_text(message.phone, text)
 
         interaction_logger = InteractionLogger()
         await interaction_logger.log(
@@ -738,7 +749,7 @@ async def _handle_subscription_required_user(
                 "mode": "subscription_block",
                 "subscription_status": phone_info.subscription_status,
                 "cta_url": subscribe_url,
-                "quick_actions_offered": [ACCESS_WEB_BUTTON_ID],
+                "quick_actions_offered": [],
             },
         )
     except Exception as e:
@@ -767,23 +778,22 @@ async def _handle_unregistered_user(
     or conversational onboarding.
     """
     try:
+        settings = get_settings()
         url, already_registered = await _fetch_unregistered_onboarding_url(message.phone)
+        cta_url: str | None = None
 
         if url:
+            cta_url = _force_frontend_domain(settings, url)
             name = (message.contact_name or "").strip() or None
             greeting = f"Hola {name}! 👋" if name else "Hola! 👋"
             text = (
                 f"{greeting} Aira pone tu hogar en un solo lugar: gastos, agenda, "
                 "listas y recordatorios, todo por WhatsApp. Sin apps ni planillas.\n\n"
-                "Para empezar o conocer más, ingresá a la web tocando el botón de abajo.\n\n"
+                "Para empezar o conocer más, ingresá a la web:\n"
+                f"{cta_url}\n\n"
                 "Cuando termines, volvé a escribirme."
             )
-            await _send_redirect_with_web_button(
-                whatsapp=whatsapp,
-                phone=message.phone,
-                text=text,
-                cta_url=url,
-            )
+            await whatsapp.send_text(message.phone, text)
         elif already_registered:
             text = "Este número ya está registrado en otro hogar. Si tenés problemas para ingresar, contactá soporte."
             await whatsapp.send_text(message.phone, text)
@@ -805,8 +815,8 @@ async def _handle_unregistered_user(
             response_time_ms=0,
             metadata={
                 "mode": "unregistered_redirect",
-                "cta_url": url,
-                "quick_actions_offered": [ACCESS_WEB_BUTTON_ID] if url else [],
+                "cta_url": cta_url,
+                "quick_actions_offered": [],
             },
         )
         logger.info("Unregistered user redirected to web onboarding", phone=message.phone)

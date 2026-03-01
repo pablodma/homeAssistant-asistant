@@ -184,8 +184,8 @@ def test_incoming_message_from_webhook_button_type_maps_to_interactive_payload()
 
 
 @pytest.mark.asyncio
-async def test_handle_unregistered_user_sends_aira_copy_and_button(monkeypatch):
-    """Unregistered users should receive Aira copy + web quick-action button."""
+async def test_handle_unregistered_user_sends_aira_copy_and_link(monkeypatch):
+    """Unregistered users should receive Aira copy + plain web link."""
 
     class _FakeResponse:
         status_code = 200
@@ -202,8 +202,14 @@ async def test_handle_unregistered_user_sends_aira_copy_and_button(monkeypatch):
         async def log(self, **kwargs):  # noqa: ARG002
             return "interaction-1"
 
+    class _FakeSettings:
+        @property
+        def is_production(self) -> bool:
+            return False
+
     monkeypatch.setattr(webhook_module, "get_backend_client", lambda: _FakeBackend())
     monkeypatch.setattr(webhook_module, "InteractionLogger", lambda: _FakeInteractionLogger())
+    monkeypatch.setattr(webhook_module, "get_settings", lambda: _FakeSettings())
 
     whatsapp = _FakeWhatsAppClient()
     message = IncomingMessage(
@@ -216,17 +222,14 @@ async def test_handle_unregistered_user_sends_aira_copy_and_button(monkeypatch):
 
     await webhook_module._handle_unregistered_user(message, whatsapp)
 
-    assert len(whatsapp.sent_texts) == 0
+    assert len(whatsapp.sent_texts) == 1
+    text = whatsapp.sent_texts[0][1]
+    assert "Aira pone tu hogar en un solo lugar" in text
+    assert "Para empezar o conocer más, ingresá a la web:" in text
+    assert "https://dev.aira-home.io/onboarding?token=abc" in text
+    assert "Cuando termines, volvé a escribirme." in text
 
-    assert len(whatsapp.sent_buttons) == 1
-    button_body = whatsapp.sent_buttons[0]["body"]
-    assert "Aira pone tu hogar en un solo lugar" in button_body
-    assert "Para empezar o conocer más, ingresá a la web tocando el botón de abajo." in button_body
-    assert "Cuando termines, volvé a escribirme." in button_body
-
-    button = whatsapp.sent_buttons[0]["buttons"][0]
-    assert button["id"] == webhook_module.ACCESS_WEB_BUTTON_ID
-    assert button["title"] == "Ir a la web"
+    assert len(whatsapp.sent_buttons) == 0
 
 
 @pytest.mark.asyncio
@@ -234,7 +237,7 @@ async def test_handle_unregistered_user_sends_aira_copy_and_button(monkeypatch):
     ("subscription_status", "expected_fragment"),
     [
         ("pending", "vas a poder usar Aira"),
-        ("canceled", "Para empezar o conocer más, ingresá a la web tocando el botón de abajo."),
+        ("canceled", "Para empezar o conocer más, ingresá a la web:"),
     ],
 )
 async def test_handle_subscription_required_user_sends_button_and_updated_copy(
@@ -242,10 +245,12 @@ async def test_handle_subscription_required_user_sends_button_and_updated_copy(
     subscription_status: str,
     expected_fragment: str,
 ):
-    """Subscription blocked users should get updated copy + web quick-action button."""
+    """Subscription blocked users should get updated copy + plain web link."""
 
     class _FakeSettings:
-        frontend_url = "https://app.example.com"
+        @property
+        def is_production(self) -> bool:
+            return False
 
     class _FakeInteractionLogger:
         async def log(self, **kwargs):  # noqa: ARG002
@@ -278,24 +283,23 @@ async def test_handle_subscription_required_user_sends_button_and_updated_copy(
 
     await webhook_module._handle_subscription_required_user(message, phone_info, whatsapp)
 
-    assert len(whatsapp.sent_texts) == 0
+    assert len(whatsapp.sent_texts) == 1
+    text = whatsapp.sent_texts[0][1]
+    assert expected_fragment in text
+    assert "https://dev.aira-home.io/contratar" in text
+    assert "Cuando termines, volvé a escribirme." in text
 
-    assert len(whatsapp.sent_buttons) == 1
-    button_body = whatsapp.sent_buttons[0]["body"]
-    assert expected_fragment in button_body
-    assert "Cuando termines, volvé a escribirme." in button_body
-
-    button = whatsapp.sent_buttons[0]["buttons"][0]
-    assert button["id"] == webhook_module.ACCESS_WEB_BUTTON_ID
-    assert button["title"] == "Ir a la web"
+    assert len(whatsapp.sent_buttons) == 0
 
 
 @pytest.mark.asyncio
-async def test_handle_setup_user_sends_button(monkeypatch):
-    """Setup-pending users should receive link + quick-action button."""
+async def test_handle_setup_user_sends_link(monkeypatch):
+    """Setup-pending users should receive plain web link."""
 
     class _FakeSettings:
-        frontend_url = "https://app.example.com"
+        @property
+        def is_production(self) -> bool:
+            return False
 
     class _FakeInteractionLogger:
         async def log(self, **kwargs):  # noqa: ARG002
@@ -328,13 +332,10 @@ async def test_handle_setup_user_sends_button(monkeypatch):
 
     await webhook_module._handle_setup_user(message, phone_info, whatsapp)
 
-    assert len(whatsapp.sent_texts) == 0
+    assert len(whatsapp.sent_texts) == 1
+    text = whatsapp.sent_texts[0][1]
+    assert "Completá la configuración de tu hogar en la web:" in text
+    assert "https://dev.aira-home.io/onboarding" in text
+    assert "Cuando termines, volvé a escribirme." in text
 
-    assert len(whatsapp.sent_buttons) == 1
-    button_body = whatsapp.sent_buttons[0]["body"]
-    assert "Completá la configuración de tu hogar tocando el botón de abajo." in button_body
-    assert "Cuando termines, volvé a escribirme." in button_body
-
-    button = whatsapp.sent_buttons[0]["buttons"][0]
-    assert button["id"] == webhook_module.ACCESS_WEB_BUTTON_ID
-    assert button["title"] == "Ir a la web"
+    assert len(whatsapp.sent_buttons) == 0
