@@ -36,6 +36,7 @@ router = APIRouter(tags=["WhatsApp Webhook"])
 
 # Per-phone rate limiter (in-memory, resets on restart)
 _rate_limit_store: dict[str, list[float]] = {}
+ACCESS_WEB_BUTTON_ID = "access_open_web"
 
 
 def _is_rate_limited(phone: str, max_per_minute: int = 20) -> bool:
@@ -510,6 +511,22 @@ async def process_message(message: IncomingMessage) -> None:
             logger.error("Failed to send error message to user")
 
 
+async def _send_redirect_with_web_button(
+    whatsapp,
+    phone: str,
+    text: str,
+) -> None:
+    """Send a web redirect text plus a quick action button."""
+    await whatsapp.send_text(phone, text)
+    sent = await whatsapp.send_interactive_buttons(
+        phone=phone,
+        body="Elegí una acción rápida para continuar en la web:",
+        buttons=[{"id": ACCESS_WEB_BUTTON_ID, "title": "Ir a la web"}],
+    )
+    if not sent:
+        logger.warning("failed_to_send_redirect_button", phone=phone)
+
+
 async def _handle_setup_user(
     message: IncomingMessage,
     phone_info,
@@ -527,7 +544,11 @@ async def _handle_setup_user(
             f"Tu pago está confirmado. Completá la configuración de tu hogar acá: {url} "
             "Cuando termines, volvé a escribirme."
         )
-        await whatsapp.send_text(message.phone, text)
+        await _send_redirect_with_web_button(
+            whatsapp=whatsapp,
+            phone=message.phone,
+            text=text,
+        )
 
         interaction_logger = InteractionLogger()
         await interaction_logger.log(
@@ -540,7 +561,11 @@ async def _handle_setup_user(
             tokens_in=0,
             tokens_out=0,
             response_time_ms=0,
-            metadata={"mode": "setup_redirect"},
+            metadata={
+                "mode": "setup_redirect",
+                "cta_url": url,
+                "quick_actions_offered": [ACCESS_WEB_BUTTON_ID],
+            },
         )
         logger.info(
             "Setup-pending user redirected to web onboarding",
@@ -574,16 +599,22 @@ async def _handle_subscription_required_user(
 
         if phone_info.subscription_status == "pending":
             text = (
-                f"Tu pago todavía está pendiente. Cuando se confirme, vas a poder usar HomeAI. "
-                f"Si necesitás reintentar, hacelo acá: {subscribe_url}"
+                f"Tu pago todavía está pendiente. Cuando se confirme, vas a poder usar Aira. "
+                f"Si necesitás reintentar, hacelo acá: {subscribe_url}\n\n"
+                "Cuando termines, volvé a escribirme."
             )
         else:
             text = (
-                f"Para seguir usando HomeAI necesitás una suscripción activa. "
-                f"Podés activarla desde acá: {subscribe_url}"
+                f"Para seguir usando Aira necesitás una suscripción activa. "
+                f"Para empezar o conocer más, ingresá a la web: {subscribe_url}\n\n"
+                "Cuando termines, volvé a escribirme."
             )
 
-        await whatsapp.send_text(message.phone, text)
+        await _send_redirect_with_web_button(
+            whatsapp=whatsapp,
+            phone=message.phone,
+            text=text,
+        )
 
         interaction_logger = InteractionLogger()
         await interaction_logger.log(
@@ -599,6 +630,8 @@ async def _handle_subscription_required_user(
             metadata={
                 "mode": "subscription_block",
                 "subscription_status": phone_info.subscription_status,
+                "cta_url": subscribe_url,
+                "quick_actions_offered": [ACCESS_WEB_BUTTON_ID],
             },
         )
     except Exception as e:
@@ -640,17 +673,22 @@ async def _handle_unregistered_user(
             name = (message.contact_name or "").strip() or None
             greeting = f"Hola {name}! 👋" if name else "Hola! 👋"
             text = (
-                f"{greeting} HomeAI pone tu hogar en un solo lugar: gastos, agenda, "
+                f"{greeting} Aira pone tu hogar en un solo lugar: gastos, agenda, "
                 "listas y recordatorios, todo por WhatsApp. Sin apps ni planillas.\n\n"
-                f"Para activarlo, completá tu registro acá: {data['url']}\n\n"
+                f"Para empezar o conocer más, ingresá a la web: {data['url']}\n\n"
                 "Cuando termines, volvé a escribirme."
+            )
+            await _send_redirect_with_web_button(
+                whatsapp=whatsapp,
+                phone=message.phone,
+                text=text,
             )
         elif data.get("already_registered"):
             text = "Este número ya está registrado en otro hogar. Si tenés problemas para ingresar, contactá soporte."
+            await whatsapp.send_text(message.phone, text)
         else:
             text = "Algo falló; intentá más tarde o contactá soporte."
-
-        await whatsapp.send_text(message.phone, text)
+            await whatsapp.send_text(message.phone, text)
 
         # Log for admin visibility (no tenant)
         interaction_logger = InteractionLogger()
@@ -664,7 +702,11 @@ async def _handle_unregistered_user(
             tokens_in=0,
             tokens_out=0,
             response_time_ms=0,
-            metadata={"mode": "unregistered_redirect"},
+            metadata={
+                "mode": "unregistered_redirect",
+                "cta_url": data.get("url"),
+                "quick_actions_offered": [ACCESS_WEB_BUTTON_ID] if data.get("url") else [],
+            },
         )
         logger.info("Unregistered user redirected to web onboarding", phone=message.phone)
 

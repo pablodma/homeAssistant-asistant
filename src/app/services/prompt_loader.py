@@ -118,7 +118,7 @@ class PromptLoader:
             "No prompt found for agent - using generic fallback",
             agent_name=agent_name,
         )
-        return "Sos HomeAI, el asistente virtual del hogar. Ayudá al usuario con sus consultas. NUNCA te identifiques como un agente o módulo específico."
+        return "Sos Aira, el asistente virtual del hogar. Ayudá al usuario con sus consultas. NUNCA te identifiques como un agente o módulo específico."
 
     async def get_all_prompts(self, tenant_id: str) -> dict[str, str]:
         """Get all prompts.
