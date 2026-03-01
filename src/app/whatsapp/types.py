@@ -46,6 +46,13 @@ class WhatsAppInteractiveButtonReply(BaseModel):
     title: str
 
 
+class WhatsAppButtonMessage(BaseModel):
+    """Button message payload for message.type == 'button'."""
+
+    payload: str
+    text: str
+
+
 class WhatsAppInteractiveResponse(BaseModel):
     """WhatsApp interactive response (list or button selection)."""
 
@@ -63,6 +70,7 @@ class WhatsAppMessage(BaseModel):
     type: Literal["text", "image", "audio", "video", "document", "location", "contacts", "button", "interactive"]
     text: Optional[WhatsAppTextMessage] = None
     audio: Optional[WhatsAppAudioMessage] = None
+    button: Optional[WhatsAppButtonMessage] = None
     interactive: Optional[WhatsAppInteractiveResponse] = None
 
     class Config:
@@ -182,6 +190,19 @@ class IncomingMessage(BaseModel):
                 is_interactive=True,
                 interactive_type=interactive.type,
                 interactive_id=interactive_id,
+            )
+
+        # Handle button responses (can arrive as type == "button" on some webhook payloads)
+        if message.type == "button" and message.button:
+            return cls(
+                message_id=message.id,
+                phone=phone,
+                text=message.button.text,
+                timestamp=datetime.fromtimestamp(int(message.timestamp)),
+                contact_name=contact_name,
+                is_interactive=True,
+                interactive_type="button_reply",
+                interactive_id=message.button.payload,
             )
 
         # Fallback for other message types

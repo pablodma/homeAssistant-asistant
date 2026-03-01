@@ -6,7 +6,7 @@ import pytest
 
 from src.app.services.phone_resolver import PhoneTenantInfo
 from src.app.whatsapp import webhook as webhook_module
-from src.app.whatsapp.types import IncomingMessage
+from src.app.whatsapp.types import IncomingMessage, WhatsAppMessage
 
 
 class _FakeWhatsAppClient:
@@ -121,6 +121,66 @@ async def test_process_message_routes_access_web_button_click(monkeypatch):
     await webhook_module.process_message(message)
 
     assert access_button_called is True
+
+
+@pytest.mark.asyncio
+async def test_process_message_routes_access_web_button_click_from_text_fallback(monkeypatch):
+    """Text fallback 'Ir a la web' should trigger direct web access handler."""
+    access_button_called = False
+
+    class _FakeResolver:
+        async def resolve(self, phone: str):  # noqa: ARG002
+            return None
+
+        def invalidate_cache(self, phone: str) -> None:  # noqa: ARG002
+            return None
+
+    async def _fake_handle_access_web_button_click(message, phone_info, whatsapp):  # noqa: ARG001
+        nonlocal access_button_called
+        access_button_called = True
+
+    async def _fail_unregistered_handler(message, whatsapp):  # noqa: ARG001
+        raise AssertionError("No debería re-ejecutar el flujo de no registrado al enviar 'Ir a la web'")
+
+    monkeypatch.setattr(webhook_module, "get_whatsapp_client", lambda: _FakeWhatsAppClient())
+    monkeypatch.setattr(webhook_module, "get_phone_resolver", lambda: _FakeResolver())
+    monkeypatch.setattr(webhook_module, "_handle_access_web_button_click", _fake_handle_access_web_button_click)
+    monkeypatch.setattr(webhook_module, "_handle_unregistered_user", _fail_unregistered_handler)
+    monkeypatch.setattr(webhook_module, "_is_rate_limited", lambda *args, **kwargs: False)
+
+    message = IncomingMessage(
+        message_id="msg-access-cta-2",
+        phone="5491111111111",
+        text="Ir a la web",
+        timestamp=datetime.now(timezone.utc),
+        contact_name="Pablo",
+        is_interactive=False,
+    )
+
+    await webhook_module.process_message(message)
+
+    assert access_button_called is True
+
+
+def test_incoming_message_from_webhook_button_type_maps_to_interactive_payload():
+    """When webhook uses type='button', payload should map to interactive_id."""
+    raw = {
+        "id": "wamid.button.1",
+        "from": "5491111111111",
+        "timestamp": "1710000000",
+        "type": "button",
+        "button": {
+            "payload": webhook_module.ACCESS_WEB_BUTTON_ID,
+            "text": "Ir a la web",
+        },
+    }
+    message = WhatsAppMessage.model_validate(raw)
+    incoming = IncomingMessage.from_webhook(message)
+
+    assert incoming.is_interactive is True
+    assert incoming.interactive_type == "button_reply"
+    assert incoming.interactive_id == webhook_module.ACCESS_WEB_BUTTON_ID
+    assert incoming.text == "Ir a la web"
 
 
 @pytest.mark.asyncio

@@ -37,6 +37,7 @@ router = APIRouter(tags=["WhatsApp Webhook"])
 # Per-phone rate limiter (in-memory, resets on restart)
 _rate_limit_store: dict[str, list[float]] = {}
 ACCESS_WEB_BUTTON_ID = "access_open_web"
+ACCESS_WEB_BUTTON_TITLE = "ir a la web"
 
 
 def _is_rate_limited(phone: str, max_per_minute: int = 20) -> bool:
@@ -168,6 +169,15 @@ async def receive_webhook(
                             incoming = IncomingMessage.from_webhook(message, contact)
                             background_tasks.add_task(process_message, incoming)
 
+                        # Handle button replies (some payloads use type="button")
+                        elif message.type == "button" and message.button:
+                            contact = None
+                            if change.value.contacts:
+                                contact = change.value.contacts[0]
+
+                            incoming = IncomingMessage.from_webhook(message, contact)
+                            background_tasks.add_task(process_message, incoming)
+
         return {"status": "ok"}
 
     except Exception as e:
@@ -292,7 +302,12 @@ async def process_message(message: IncomingMessage) -> None:
         phone_info = await phone_resolver.resolve(message.phone)
 
         # Handle access CTA button clicks before normal gating flow.
-        if message.is_interactive and message.interactive_id == ACCESS_WEB_BUTTON_ID:
+        text_normalized = (message.text or "").strip().lower()
+        is_access_button_click = (
+            (message.is_interactive and message.interactive_id == ACCESS_WEB_BUTTON_ID)
+            or text_normalized == ACCESS_WEB_BUTTON_TITLE
+        )
+        if is_access_button_click:
             await _handle_access_web_button_click(message, phone_info, whatsapp)
             return
 
