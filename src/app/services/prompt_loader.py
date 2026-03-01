@@ -28,8 +28,7 @@ PROMPTS_DIR = Path(__file__).parent.parent.parent.parent / "docs" / "prompts"
 # Mapping of agent names to their prompt files
 PROMPT_FILES = {
     "finance": "finance-agent.md",
-    "calendar": "calendar-agent.md",
-    "reminder": "reminder-agent.md",
+    "agenda": "calendar-agent.md",
     "shopping": "shopping-agent.md",
     "vehicle": "vehicle-agent.md",
     "subscription": "subscription-agent.md",

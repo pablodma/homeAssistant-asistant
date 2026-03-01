@@ -19,8 +19,7 @@ FALLBACK_RESPONSE = "Hubo un problema procesando tu mensaje. Por favor, intentá
 CANARY_TOKENS: dict[str, str] = {
     "router": "CNRY-RTR-7k9xQ",
     "finance": "CNRY-FIN-m3pWz",
-    "calendar": "CNRY-CAL-v8nRj",
-    "reminder": "CNRY-RMD-q2hLs",
+    "agenda": "CNRY-AGD-m4kTz",
     "shopping": "CNRY-SHP-y5tNf",
     "vehicle": "CNRY-VHC-d4wKb",
     "subscription": "CNRY-SUB-g6cXa",

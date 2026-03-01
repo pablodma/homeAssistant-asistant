@@ -42,14 +42,14 @@ globs:
 │           ┌───────────────┼───────────────┐                     │
 │           ▼               ▼               ▼                     │
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐                │
-│  │   Finance   │ │  Calendar   │ │  Reminder   │ ...            │
+│  │   Finance   │ │   Agenda    │ │   Shopping  │ ...            │
 │  │   Agent     │ │   Agent     │ │   Agent     │                │
 │  └──────┬──────┘ └──────┬──────┘ └──────┬──────┘                │
 │         │               │               │                        │
 │         ▼               ▼               ▼                        │
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐                │
 │  │ Backend API │ │ Backend API │ │ PostgreSQL  │                │
-│  │ (finance)   │ │ (calendar)  │ │ (directo)   │                │
+│  │ (finance)   │ │ (agenda)    │ │ (directo)   │                │
 │  └─────────────┘ └─────────────┘ └─────────────┘                │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -96,8 +96,7 @@ homeai-assis/
 │   │   ├── base.py               # BaseAgent abstracto
 │   │   ├── router.py             # RouterAgent (orquestador)
 │   │   ├── finance.py            # FinanceAgent
-│   │   ├── calendar.py           # CalendarAgent
-│   │   ├── reminder.py           # ReminderAgent
+│   │   ├── calendar.py           # CalendarAgent (name="agenda", prompt: calendar-agent.md)
 │   │   ├── shopping.py           # ShoppingAgent
 │   │   └── vehicle.py            # VehicleAgent
 │   ├── services/
@@ -136,14 +135,14 @@ homeai-assis/
 | Agente | Backend/DB | Prompt |
 |--------|------------|--------|
 | **Finance** | Backend API | `docs/prompts/finance-agent.md` |
-| **Calendar** | Backend API | `docs/prompts/calendar-agent.md` |
-| **Reminder** | PostgreSQL directo | `docs/prompts/reminder-agent.md` |
+| **Agenda** | Backend API | `docs/prompts/calendar-agent.md` |
 | **Shopping** | PostgreSQL directo | `docs/prompts/shopping-agent.md` |
 | **Vehicle** | PostgreSQL directo | `docs/prompts/vehicle-agent.md` |
+| **Subscription** | Backend API | `docs/prompts/subscription-agent.md` |
 
 ## Comunicación con Backend
 
-El bot llama al backend para Finance y Calendar:
+El bot llama al backend para Finance y Agenda (calendar + reminders):
 
 ```python
 # Finance - Registrar gasto
@@ -167,11 +166,10 @@ Authorization: Bearer {SERVICE_TOKEN}
 
 ## Acceso Directo a DB
 
-Reminders, Shopping y Vehicles escriben directo a PostgreSQL:
+Shopping y Vehicles escriben directo a PostgreSQL. Agenda (calendar + reminders) usa Backend API.
 
 | Tabla | Agente | Campos principales |
 |-------|--------|-------------------|
-| `reminders` | Reminder | tenant_id, user_phone, title, due_at, recurrence |
 | `shopping_items` | Shopping | tenant_id, list_name, item_name, quantity, purchased |
 | `vehicles` | Vehicle | tenant_id, plate, brand, model, year |
 | `vehicle_services` | Vehicle | vehicle_id, service_type, date, mileage, cost |
@@ -311,7 +309,7 @@ Los prompts viven en archivos de configuración (NO en base de datos):
 ```
 docs/prompts/
 ├── finance-agent.md    # Agente de finanzas
-├── calendar-agent.md   # Agente de calendario  
+├── calendar-agent.md   # Agenda Agent (eventos + recordatorios)
 ├── router-agent.md     # Orquestador principal
 ├── qa-agent.md         # Control de calidad
 └── ...

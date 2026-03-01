@@ -22,8 +22,7 @@ alwaysApply: true
 | Agente | Funcionalidad | Estado |
 |--------|---------------|--------|
 | Finance | Gastos, presupuestos, reportes | ✅ |
-| Calendar | Eventos, agenda, Google Calendar | ✅ |
-| Reminder | Recordatorios únicos y recurrentes | ✅ |
+| Agenda | Eventos, recordatorios, Google Calendar | ✅ |
 | Shopping | Listas de compras | ✅ |
 | Vehicle | Vehículos, servicios, mantenimiento | ✅ |
 

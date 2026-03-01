@@ -518,7 +518,7 @@ class QABatchReviewer:
     ) -> dict[str, list[dict[str, Any]]]:
         """Group issues by agent name for agents that have actionable proposals."""
         # Known agent names
-        known_agents = {"router", "finance", "calendar", "reminder", "shopping", "vehicle", "qa"}
+        known_agents = {"router", "finance", "agenda", "shopping", "vehicle", "qa"}
 
         # Group issues by agent
         by_agent: dict[str, list[dict[str, Any]]] = {}

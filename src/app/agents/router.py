@@ -35,12 +35,9 @@ class RouterAgent(BaseAgent):
             if agent_name == "finance":
                 from .finance import FinanceAgent
                 self._sub_agents[agent_name] = FinanceAgent()
-            elif agent_name == "calendar":
+            elif agent_name == "agenda":
                 from .calendar import CalendarAgent
                 self._sub_agents[agent_name] = CalendarAgent()
-            elif agent_name == "reminder":
-                from .reminder import ReminderAgent
-                self._sub_agents[agent_name] = ReminderAgent()
             elif agent_name == "shopping":
                 from .shopping import ShoppingAgent
                 self._sub_agents[agent_name] = ShoppingAgent()
@@ -146,31 +143,14 @@ class RouterAgent(BaseAgent):
             {
                 "type": "function",
                 "function": {
-                    "name": "calendar_agent",
-                    "description": "Gestiona eventos, citas y agenda",
+                    "name": "agenda_agent",
+                    "description": "Gestiona eventos, citas, agenda y recordatorios",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "user_request": {
                                 "type": "string",
-                                "description": "El pedido del usuario relacionado con calendario",
-                            }
-                        },
-                        "required": ["user_request"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "reminder_agent",
-                    "description": "Crea y gestiona recordatorios",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "user_request": {
-                                "type": "string",
-                                "description": "El pedido del usuario relacionado con recordatorios",
+                                "description": "El pedido del usuario relacionado con calendario, agenda o recordatorios",
                             }
                         },
                         "required": ["user_request"],

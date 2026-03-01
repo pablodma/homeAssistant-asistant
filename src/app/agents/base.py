@@ -12,7 +12,7 @@ from ..services.prompt_loader import PromptLoader
 
 logger = structlog.get_logger()
 
-FIRST_TIME_AGENTS: set[str] = {"finance", "calendar", "reminder", "shopping", "vehicle"}
+FIRST_TIME_AGENTS: set[str] = {"finance", "agenda", "shopping", "vehicle"}
 
 FIRST_TIME_TOOL_DEFINITION: dict[str, Any] = {
     "type": "function",

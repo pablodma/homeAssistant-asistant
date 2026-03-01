@@ -1,4 +1,4 @@
-"""Calendar Agent - Event and schedule management."""
+"""Agenda Agent - Event, schedule, and reminder management."""
 
 import json
 from datetime import datetime, timedelta
@@ -15,9 +15,9 @@ logger = structlog.get_logger()
 
 
 class CalendarAgent(BaseAgent):
-    """Agent for managing calendar events."""
+    """Agent for managing calendar events and reminders (unified agenda)."""
 
-    name = "calendar"
+    name = "agenda"
 
     def __init__(self):
         """Initialize the calendar agent."""
@@ -181,6 +181,54 @@ class CalendarAgent(BaseAgent):
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "crear_recordatorio",
+                    "description": "Crea un nuevo recordatorio",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "message": {"type": "string", "description": "Qué recordar"},
+                            "trigger_date": {"type": "string", "description": "Fecha YYYY-MM-DD"},
+                            "trigger_time": {"type": "string", "description": "Hora HH:MM"},
+                            "recurrence": {
+                                "type": "string",
+                                "enum": ["none", "daily", "weekly", "monthly"],
+                                "description": "Frecuencia de repetición",
+                            },
+                        },
+                        "required": ["message"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "listar_recordatorios",
+                    "description": "Lista recordatorios pendientes",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "search": {"type": "string", "description": "Buscar por texto"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "eliminar_recordatorio",
+                    "description": "Elimina un recordatorio",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "search_query": {"type": "string", "description": "Texto para buscar"},
+                        },
+                        "required": ["search_query"],
+                    },
+                },
+            },
         ]
 
         if is_first_time:
@@ -341,6 +389,37 @@ class CalendarAgent(BaseAgent):
                 response = await backend.get(
                     f"{base_path}/agent/calendar/next",
                     params={"user_phone": phone},
+                )
+            elif tool_name == "crear_recordatorio":
+                trigger_date = args.get("trigger_date")
+                if not trigger_date:
+                    trigger_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+                params = {
+                    "message": args.get("message", ""),
+                    "trigger_date": trigger_date,
+                    "trigger_time": args.get("trigger_time", "09:00"),
+                    "recurrence": args.get("recurrence", "none"),
+                    "user_phone": phone,
+                }
+                response = await backend.post(
+                    f"{base_path}/agent/reminders", params=params,
+                )
+            elif tool_name == "listar_recordatorios":
+                params = {"user_phone": phone}
+                if args.get("search"):
+                    params["search"] = args["search"]
+                response = await backend.get(
+                    f"{base_path}/agent/reminders", params=params,
+                )
+            elif tool_name == "eliminar_recordatorio":
+                params = {
+                    "search_query": args.get("search_query", ""),
+                    "user_phone": phone,
+                }
+                response = await backend.request(
+                    "DELETE",
+                    f"{base_path}/agent/reminders/search",
+                    params=params,
                 )
             else:
                 return {"success": False, "error": f"Unknown tool: {tool_name}"}
@@ -568,6 +647,87 @@ class CalendarAgent(BaseAgent):
                 return response
             else:
                 return "📅 No tenés eventos próximos programados."
+
+        elif tool_name == "crear_recordatorio":
+            r_message = data.get("message", "")
+            r_date = data.get("trigger_date", "")
+            r_time = data.get("trigger_time", "")
+            r_recurrence = data.get("recurrence", "none")
+
+            response = f"⏰ Recordatorio creado:\n\"{r_message.capitalize()}\"\n📆 {self._format_date(r_date)} a las {r_time}"
+
+            if r_recurrence != "none":
+                recurrence_text = {
+                    "daily": "Todos los días",
+                    "weekly": "Todas las semanas",
+                    "monthly": "Todos los meses",
+                }
+                response += f"\n🔄 {recurrence_text.get(r_recurrence, r_recurrence)}"
+
+            return response
+
+        elif tool_name == "listar_recordatorios":
+            reminders = data.get("reminders", [])
+            if not reminders:
+                return "⏰ No tenés recordatorios pendientes.\n\n¿Querés que te recuerde algo?"
+
+            response = "⏰ Tus recordatorios pendientes:\n\n"
+
+            today = datetime.now().date()
+            today_items: list[dict] = []
+            tomorrow_items: list[dict] = []
+            later_items: list[dict] = []
+            recurring_items: list[dict] = []
+
+            for r in reminders:
+                if r.get("recurrence") != "none":
+                    recurring_items.append(r)
+                else:
+                    r_date = datetime.strptime(r["trigger_date"], "%Y-%m-%d").date()
+                    if r_date == today:
+                        today_items.append(r)
+                    elif r_date == today + timedelta(days=1):
+                        tomorrow_items.append(r)
+                    else:
+                        later_items.append(r)
+
+            if today_items:
+                response += "📌 Hoy:\n"
+                for r in today_items:
+                    response += f"• {r['trigger_time']} - {r['message']}\n"
+                response += "\n"
+
+            if tomorrow_items:
+                response += "📌 Mañana:\n"
+                for r in tomorrow_items:
+                    response += f"• {r['trigger_time']} - {r['message']}\n"
+                response += "\n"
+
+            if later_items:
+                response += "📌 Próximos:\n"
+                for r in later_items[:5]:
+                    response += f"• {self._format_date(r['trigger_date'])} {r['trigger_time']} - {r['message']}\n"
+                response += "\n"
+
+            if recurring_items:
+                response += "📌 Recurrentes:\n"
+                for r in recurring_items:
+                    recurrence_text = {
+                        "daily": "diario",
+                        "weekly": "semanal",
+                        "monthly": "mensual",
+                    }
+                    response += f"• \"{r['message']}\" - {recurrence_text.get(r['recurrence'], r['recurrence'])}\n"
+
+            return response.strip()
+
+        elif tool_name == "eliminar_recordatorio":
+            deleted = data.get("deleted", False)
+            if deleted:
+                r_message = data.get("message", "")
+                return f"✅ Recordatorio cancelado:\n\"{r_message}\""
+            else:
+                return "❌ No encontré un recordatorio que coincida."
 
         return "✓ Operación completada."
 

@@ -23,8 +23,7 @@ logger = structlog.get_logger()
 PROMPT_FILE_PATHS = {
     "router": "docs/prompts/router-agent.md",
     "finance": "docs/prompts/finance-agent.md",
-    "calendar": "docs/prompts/calendar-agent.md",
-    "reminder": "docs/prompts/reminder-agent.md",
+    "agenda": "docs/prompts/calendar-agent.md",
     "shopping": "docs/prompts/shopping-agent.md",
     "vehicle": "docs/prompts/vehicle-agent.md",
     "qa": "docs/prompts/qa-agent.md",
