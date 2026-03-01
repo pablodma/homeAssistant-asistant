@@ -120,7 +120,7 @@ async def test_handle_unregistered_user_sends_aira_copy_and_button(monkeypatch):
     assert len(whatsapp.sent_buttons) == 1
     button_body = whatsapp.sent_buttons[0]["body"]
     assert "Aira pone tu hogar en un solo lugar" in button_body
-    assert "Para empezar o conocer más, ingresá a la web:" in button_body
+    assert "Para empezar o conocer más, ingresá a la web tocando el botón de abajo." in button_body
     assert "Cuando termines, volvé a escribirme." in button_body
 
     button = whatsapp.sent_buttons[0]["buttons"][0]
@@ -133,7 +133,7 @@ async def test_handle_unregistered_user_sends_aira_copy_and_button(monkeypatch):
     ("subscription_status", "expected_fragment"),
     [
         ("pending", "vas a poder usar Aira"),
-        ("canceled", "Para empezar o conocer más, ingresá a la web:"),
+        ("canceled", "Para empezar o conocer más, ingresá a la web tocando el botón de abajo."),
     ],
 )
 async def test_handle_subscription_required_user_sends_button_and_updated_copy(
@@ -231,7 +231,7 @@ async def test_handle_setup_user_sends_button(monkeypatch):
 
     assert len(whatsapp.sent_buttons) == 1
     button_body = whatsapp.sent_buttons[0]["body"]
-    assert "Completá la configuración de tu hogar acá:" in button_body
+    assert "Completá la configuración de tu hogar tocando el botón de abajo." in button_body
     assert "Cuando termines, volvé a escribirme." in button_body
 
     button = whatsapp.sent_buttons[0]["buttons"][0]

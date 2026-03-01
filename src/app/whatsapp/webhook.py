@@ -515,6 +515,7 @@ async def _send_redirect_with_web_button(
     whatsapp,
     phone: str,
     text: str,
+    cta_url: str,
 ) -> None:
     """Send a single interactive message with text + web quick action button."""
     sent = await whatsapp.send_interactive_buttons(
@@ -526,7 +527,8 @@ async def _send_redirect_with_web_button(
         return
 
     logger.warning("failed_to_send_redirect_button", phone=phone)
-    await whatsapp.send_text(phone, text)
+    fallback_text = f"{text}\n\nSi no ves el botón, abrí este enlace: {cta_url}"
+    await whatsapp.send_text(phone, fallback_text)
 
 
 async def _handle_setup_user(
@@ -536,20 +538,22 @@ async def _handle_setup_user(
 ) -> None:
     """Redirect users with pending setup to web onboarding.
 
-    Sends a single message with link to complete home configuration on the web.
+    Sends a single interactive message with quick action to complete
+    home configuration on the web.
     No SubscriptionAgent or conversational setup.
     """
     try:
         settings = get_settings()
         url = f"{settings.frontend_url.rstrip('/')}/onboarding"
         text = (
-            f"Tu pago está confirmado. Completá la configuración de tu hogar acá: {url} "
+            "Tu pago está confirmado. Completá la configuración de tu hogar tocando el botón de abajo.\n\n"
             "Cuando termines, volvé a escribirme."
         )
         await _send_redirect_with_web_button(
             whatsapp=whatsapp,
             phone=message.phone,
             text=text,
+            cta_url=url,
         )
 
         interaction_logger = InteractionLogger()
@@ -602,13 +606,13 @@ async def _handle_subscription_required_user(
         if phone_info.subscription_status == "pending":
             text = (
                 f"Tu pago todavía está pendiente. Cuando se confirme, vas a poder usar Aira. "
-                f"Si necesitás reintentar, hacelo acá: {subscribe_url}\n\n"
+                "Si necesitás reintentar, ingresá a la web tocando el botón de abajo.\n\n"
                 "Cuando termines, volvé a escribirme."
             )
         else:
             text = (
                 f"Para seguir usando Aira necesitás una suscripción activa. "
-                f"Para empezar o conocer más, ingresá a la web: {subscribe_url}\n\n"
+                "Para empezar o conocer más, ingresá a la web tocando el botón de abajo.\n\n"
                 "Cuando termines, volvé a escribirme."
             )
 
@@ -616,6 +620,7 @@ async def _handle_subscription_required_user(
             whatsapp=whatsapp,
             phone=message.phone,
             text=text,
+            cta_url=subscribe_url,
         )
 
         interaction_logger = InteractionLogger()
@@ -657,8 +662,9 @@ async def _handle_unregistered_user(
 ) -> None:
     """Redirect unregistered users to web onboarding.
 
-    Calls backend to get a signed onboarding URL, then sends a single message
-    with the link. No SubscriptionAgent or conversational onboarding.
+    Calls backend to get a signed onboarding URL, then sends a single
+    interactive message with quick action button. No SubscriptionAgent
+    or conversational onboarding.
     """
     try:
         # Backend expects E.164 with leading '+' (WebLinkRequest validator)
@@ -677,13 +683,14 @@ async def _handle_unregistered_user(
             text = (
                 f"{greeting} Aira pone tu hogar en un solo lugar: gastos, agenda, "
                 "listas y recordatorios, todo por WhatsApp. Sin apps ni planillas.\n\n"
-                f"Para empezar o conocer más, ingresá a la web: {data['url']}\n\n"
+                "Para empezar o conocer más, ingresá a la web tocando el botón de abajo.\n\n"
                 "Cuando termines, volvé a escribirme."
             )
             await _send_redirect_with_web_button(
                 whatsapp=whatsapp,
                 phone=message.phone,
                 text=text,
+                cta_url=data["url"],
             )
         elif data.get("already_registered"):
             text = "Este número ya está registrado en otro hogar. Si tenés problemas para ingresar, contactá soporte."
