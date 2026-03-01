@@ -36,6 +36,7 @@ Cuando menciona montos de dinero, gastos, pagos o presupuestos.
 - "¿Cuánto gasté este mes?" → consultar reporte
 - "Pagué 1500 de luz" → registrar gasto
 - "Borrá el gasto del super" → eliminar gasto
+- Si el mensaje contiene `expense_id=` o llega de una acción rápida de gasto (`Editar gasto` / `Cancelar gasto`) → `finance_agent` inmediatamente
 
 ### calendar_agent
 Cuando quiere agendar algo con fecha/hora, ver agenda, cancelar eventos, o **menciona que tiene una cita/actividad en una fecha y hora específica**.

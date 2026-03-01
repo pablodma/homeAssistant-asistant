@@ -18,6 +18,12 @@ from ..services.conversation import ConversationService
 from ..services.interaction_log import InteractionLogger
 from ..services.input_guard import sanitize_message
 from ..services.output_guard import check_response
+from ..services.quick_actions import (
+    clear_pending_expense_edit,
+    get_pending_expense_edit,
+    parse_quick_action_id,
+    set_pending_expense_edit,
+)
 from ..services.quality_logger import get_quality_logger
 from ..services.backend_client import get_backend_client
 from ..services.phone_resolver import get_phone_resolver
@@ -183,6 +189,9 @@ async def process_message(message: IncomingMessage) -> None:
     # Track context for error logging
     tenant_id: str | None = None
     agent_used: str | None = None
+    selected_quick_action_id: str | None = None
+    selected_quick_action_kind: str | None = None
+    selected_quick_action_expense_id: str | None = None
 
     settings = get_settings()
     if _is_rate_limited(message.phone, settings.max_messages_per_minute):
@@ -246,6 +255,36 @@ async def process_message(message: IncomingMessage) -> None:
         # Input guard: sanitize and flag injection attempts
         guard_result = sanitize_message(message.text or "")
         message = message.model_copy(update={"text": guard_result.text})
+
+        # Convert known interactive actions to explicit user intents.
+        if message.is_interactive and message.interactive_id:
+            parsed_action = parse_quick_action_id(message.interactive_id)
+            if parsed_action:
+                selected_quick_action_id = message.interactive_id
+                selected_quick_action_kind = parsed_action.kind
+                selected_quick_action_expense_id = parsed_action.expense_id
+
+                if parsed_action.kind == "expense_delete" and parsed_action.expense_id:
+                    message = message.model_copy(
+                        update={"text": f"Eliminar gasto con expense_id={parsed_action.expense_id}"}
+                    )
+                elif parsed_action.kind == "expense_edit" and parsed_action.expense_id:
+                    set_pending_expense_edit(message.phone, parsed_action.expense_id)
+                    message = message.model_copy(
+                        update={"text": f"Editar gasto con expense_id={parsed_action.expense_id}"}
+                    )
+                elif parsed_action.kind == "menu":
+                    clear_pending_expense_edit(message.phone)
+                    message = message.model_copy(
+                        update={"text": "Quiero volver al menú principal de finanzas."}
+                    )
+
+        # If there is pending edit context, append it to next user message.
+        pending_edit = get_pending_expense_edit(message.phone)
+        if pending_edit and not message.is_interactive:
+            message = message.model_copy(
+                update={"text": f"[PENDING_EXPENSE_EDIT_ID={pending_edit.expense_id}] {message.text}"}
+            )
 
         # Resolve tenant by phone number
         phone_resolver = get_phone_resolver()
@@ -311,6 +350,43 @@ async def process_message(message: IncomingMessage) -> None:
 
         await whatsapp.send_text(message.phone, response_text)
 
+        # Send quick actions when agent metadata provides them.
+        metadata = result.metadata or {}
+        quick_actions = metadata.get("quick_actions") if isinstance(metadata, dict) else None
+        if quick_actions and isinstance(quick_actions, dict):
+            actions = quick_actions.get("actions") or []
+            if isinstance(actions, list) and actions:
+                if len(actions) <= 3:
+                    await whatsapp.send_interactive_buttons(
+                        phone=message.phone,
+                        body="Elegí una acción rápida:",
+                        buttons=[
+                            {"id": str(action.get("id", "")), "title": str(action.get("title", ""))}
+                            for action in actions
+                            if action.get("id") and action.get("title")
+                        ],
+                    )
+                else:
+                    await whatsapp.send_interactive_list(
+                        phone=message.phone,
+                        header="Acciones rápidas",
+                        body="Elegí una opción",
+                        button_text="Ver opciones",
+                        sections=[
+                            {
+                                "title": "Acciones disponibles",
+                                "rows": [
+                                    {
+                                        "id": str(action.get("id", "")),
+                                        "title": str(action.get("title", "")),
+                                    }
+                                    for action in actions
+                                    if action.get("id") and action.get("title")
+                                ],
+                            }
+                        ],
+                    )
+
         # Save to conversation history
         await conversation_service.add_message(
             phone=message.phone,
@@ -328,6 +404,18 @@ async def process_message(message: IncomingMessage) -> None:
         # Log interaction and get ID for QA
         response_time_ms = int((time.time() - start_time) * 1000)
         interaction_metadata = result.metadata or {}
+        if selected_quick_action_id:
+            interaction_metadata["quick_action_selected"] = selected_quick_action_id
+        if selected_quick_action_kind:
+            interaction_metadata["quick_action_kind"] = selected_quick_action_kind
+        if selected_quick_action_expense_id:
+            interaction_metadata["quick_action_expense_id"] = selected_quick_action_expense_id
+        if isinstance((result.metadata or {}).get("quick_actions"), dict):
+            actions = (result.metadata or {}).get("quick_actions", {}).get("actions", [])
+            if isinstance(actions, list):
+                interaction_metadata["quick_actions_offered"] = [
+                    str(a.get("id")) for a in actions if isinstance(a, dict) and a.get("id")
+                ]
         if message.is_audio:
             interaction_metadata["input_type"] = "audio"
         if guard_result.injection_suspected:
@@ -358,6 +446,14 @@ async def process_message(message: IncomingMessage) -> None:
             response_time_ms=response_time_ms,
             interaction_id=interaction_id,
         )
+
+        # Clear pending edit context when update/delete completes successfully.
+        if isinstance(result.metadata, dict):
+            tool_name = result.metadata.get("tool")
+            tool_result = result.metadata.get("result")
+            is_success = bool(tool_result and isinstance(tool_result, dict) and tool_result.get("success"))
+            if is_success and tool_name in ("modificar_gasto", "eliminar_gasto"):
+                clear_pending_expense_edit(message.phone)
 
         # Run QA analysis asynchronously (fire and forget)
         if interaction_id:

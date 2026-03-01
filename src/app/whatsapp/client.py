@@ -213,6 +213,91 @@ class WhatsAppClient:
             )
             return False
 
+    async def send_interactive_buttons(
+        self,
+        phone: str,
+        body: str,
+        buttons: list[dict[str, str]],
+    ) -> bool:
+        """Send WhatsApp reply buttons (max 3 buttons).
+
+        Args:
+            phone: Recipient phone number.
+            body: Message body text (max 1024 chars).
+            buttons: Buttons with shape [{"id": "...", "title": "..."}].
+
+        Returns:
+            True if sent successfully.
+        """
+        limited_buttons = buttons[:3]
+        if not limited_buttons:
+            return False
+
+        url = f"{WHATSAPP_API_URL}/{self.phone_number_id}/messages"
+
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json",
+        }
+
+        normalized_phone = self._normalize_phone_for_whatsapp(phone)
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": normalized_phone,
+            "type": "interactive",
+            "interactive": {
+                "type": "button",
+                "body": {"text": body[:1024]},
+                "action": {
+                    "buttons": [
+                        {
+                            "type": "reply",
+                            "reply": {
+                                "id": button["id"][:256],
+                                "title": button["title"][:20],
+                            },
+                        }
+                        for button in limited_buttons
+                    ]
+                },
+            },
+        }
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=30.0,
+                )
+
+                if response.status_code == 200:
+                    logger.info(
+                        "Interactive buttons sent successfully",
+                        phone=phone,
+                        message_id=response.json().get("messages", [{}])[0].get("id"),
+                    )
+                    return True
+
+                logger.error(
+                    "Failed to send interactive buttons",
+                    phone=phone,
+                    status_code=response.status_code,
+                    response=response.text,
+                )
+                return False
+
+        except Exception as e:
+            logger.error(
+                "Error sending interactive buttons",
+                phone=phone,
+                error=str(e),
+            )
+            return False
+
     async def download_media(self, media_id: str) -> tuple[bytes, str]:
         """Download media from WhatsApp Cloud API.
 
