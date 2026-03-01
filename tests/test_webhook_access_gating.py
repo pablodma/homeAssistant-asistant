@@ -115,13 +115,14 @@ async def test_handle_unregistered_user_sends_aira_copy_and_button(monkeypatch):
 
     await webhook_module._handle_unregistered_user(message, whatsapp)
 
-    assert len(whatsapp.sent_texts) == 1
-    sent_text = whatsapp.sent_texts[0][1]
-    assert "Aira pone tu hogar en un solo lugar" in sent_text
-    assert "Para empezar o conocer más, ingresá a la web:" in sent_text
-    assert "Cuando termines, volvé a escribirme." in sent_text
+    assert len(whatsapp.sent_texts) == 0
 
     assert len(whatsapp.sent_buttons) == 1
+    button_body = whatsapp.sent_buttons[0]["body"]
+    assert "Aira pone tu hogar en un solo lugar" in button_body
+    assert "Para empezar o conocer más, ingresá a la web:" in button_body
+    assert "Cuando termines, volvé a escribirme." in button_body
+
     button = whatsapp.sent_buttons[0]["buttons"][0]
     assert button["id"] == webhook_module.ACCESS_WEB_BUTTON_ID
     assert button["title"] == "Ir a la web"
@@ -176,12 +177,13 @@ async def test_handle_subscription_required_user_sends_button_and_updated_copy(
 
     await webhook_module._handle_subscription_required_user(message, phone_info, whatsapp)
 
-    assert len(whatsapp.sent_texts) == 1
-    sent_text = whatsapp.sent_texts[0][1]
-    assert expected_fragment in sent_text
-    assert "Cuando termines, volvé a escribirme." in sent_text
+    assert len(whatsapp.sent_texts) == 0
 
     assert len(whatsapp.sent_buttons) == 1
+    button_body = whatsapp.sent_buttons[0]["body"]
+    assert expected_fragment in button_body
+    assert "Cuando termines, volvé a escribirme." in button_body
+
     button = whatsapp.sent_buttons[0]["buttons"][0]
     assert button["id"] == webhook_module.ACCESS_WEB_BUTTON_ID
     assert button["title"] == "Ir a la web"
@@ -225,12 +227,13 @@ async def test_handle_setup_user_sends_button(monkeypatch):
 
     await webhook_module._handle_setup_user(message, phone_info, whatsapp)
 
-    assert len(whatsapp.sent_texts) == 1
-    sent_text = whatsapp.sent_texts[0][1]
-    assert "Completá la configuración de tu hogar acá:" in sent_text
-    assert "Cuando termines, volvé a escribirme." in sent_text
+    assert len(whatsapp.sent_texts) == 0
 
     assert len(whatsapp.sent_buttons) == 1
+    button_body = whatsapp.sent_buttons[0]["body"]
+    assert "Completá la configuración de tu hogar acá:" in button_body
+    assert "Cuando termines, volvé a escribirme." in button_body
+
     button = whatsapp.sent_buttons[0]["buttons"][0]
     assert button["id"] == webhook_module.ACCESS_WEB_BUTTON_ID
     assert button["title"] == "Ir a la web"

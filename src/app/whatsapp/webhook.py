@@ -516,15 +516,17 @@ async def _send_redirect_with_web_button(
     phone: str,
     text: str,
 ) -> None:
-    """Send a web redirect text plus a quick action button."""
-    await whatsapp.send_text(phone, text)
+    """Send a single interactive message with text + web quick action button."""
     sent = await whatsapp.send_interactive_buttons(
         phone=phone,
-        body="Elegí una acción rápida para continuar en la web:",
+        body=text,
         buttons=[{"id": ACCESS_WEB_BUTTON_ID, "title": "Ir a la web"}],
     )
-    if not sent:
-        logger.warning("failed_to_send_redirect_button", phone=phone)
+    if sent:
+        return
+
+    logger.warning("failed_to_send_redirect_button", phone=phone)
+    await whatsapp.send_text(phone, text)
 
 
 async def _handle_setup_user(
