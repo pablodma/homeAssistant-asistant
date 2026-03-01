@@ -305,6 +305,16 @@ async def process_message(message: IncomingMessage) -> None:
             await _handle_setup_user(message, phone_info, whatsapp)
             return
 
+        if not phone_info.has_active_subscription:
+            logger.info(
+                "subscription_required",
+                phone=message.phone,
+                tenant_id=phone_info.tenant_id,
+                subscription_status=phone_info.subscription_status,
+            )
+            await _handle_subscription_required_user(message, phone_info, whatsapp)
+            return
+
         tenant_id = phone_info.tenant_id
         user_name = phone_info.user_name or message.contact_name
 
@@ -550,6 +560,60 @@ async def _handle_setup_user(
             )
         except Exception:
             logger.error("Failed to send error message to setup user")
+
+
+async def _handle_subscription_required_user(
+    message: IncomingMessage,
+    phone_info,
+    whatsapp,
+) -> None:
+    """Block agent interaction when subscription is not authorized."""
+    try:
+        settings = get_settings()
+        subscribe_url = f"{settings.frontend_url.rstrip('/')}/contratar"
+
+        if phone_info.subscription_status == "pending":
+            text = (
+                f"Tu pago todavía está pendiente. Cuando se confirme, vas a poder usar HomeAI. "
+                f"Si necesitás reintentar, hacelo acá: {subscribe_url}"
+            )
+        else:
+            text = (
+                f"Para seguir usando HomeAI necesitás una suscripción activa. "
+                f"Podés activarla desde acá: {subscribe_url}"
+            )
+
+        await whatsapp.send_text(message.phone, text)
+
+        interaction_logger = InteractionLogger()
+        await interaction_logger.log(
+            tenant_id=phone_info.tenant_id,
+            user_phone=message.phone,
+            user_name=phone_info.user_name or message.contact_name,
+            message_in=message.text or "",
+            message_out=text,
+            agent_used="subscription_required_block",
+            tokens_in=0,
+            tokens_out=0,
+            response_time_ms=0,
+            metadata={
+                "mode": "subscription_block",
+                "subscription_status": phone_info.subscription_status,
+            },
+        )
+    except Exception as e:
+        logger.error(
+            "Error handling subscription-required user",
+            phone=message.phone,
+            error=str(e),
+        )
+        try:
+            await whatsapp.send_text(
+                message.phone,
+                "Hubo un problema. Por favor, intentá de nuevo en unos segundos.",
+            )
+        except Exception:
+            logger.error("Failed to send error message to subscription-blocked user")
 
 
 async def _handle_unregistered_user(

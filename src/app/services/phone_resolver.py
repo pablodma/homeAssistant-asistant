@@ -24,6 +24,13 @@ class PhoneTenantInfo:
     user_name: Optional[str] = None
     home_name: Optional[str] = None
     onboarding_completed: bool = True
+    is_registered: bool = True
+    tenant_active: bool = True
+    subscription_status: Optional[str] = None
+    has_active_subscription: bool = False
+    can_access_dashboard: bool = False
+    can_interact_agent: bool = False
+    next_step: str = "register"
 
 
 class PhoneResolver:
@@ -71,7 +78,7 @@ class PhoneResolver:
     
     async def _lookup_phone(self, phone: str) -> PhoneTenantInfo | None:
         """
-        Query the backend API for phone tenant mapping.
+        Query the backend API for phone access status.
         
         Args:
             phone: Phone number to look up
@@ -87,9 +94,7 @@ class PhoneResolver:
         )
         
         try:
-            response = await backend.get(
-                "/api/v1/phone/lookup", params={"phone": phone}
-            )
+            response = await backend.get("/api/v1/access/status-by-phone", params={"phone": phone})
             
             logger.debug(
                 "phone_lookup_response",
@@ -107,7 +112,7 @@ class PhoneResolver:
             
             data = response.json()
             
-            if not data.get("found"):
+            if not data.get("tenant_id"):
                 logger.info("phone_not_registered", phone=phone)
                 return None
             
@@ -123,6 +128,13 @@ class PhoneResolver:
                 user_name=data.get("user_name"),
                 home_name=data.get("home_name"),
                 onboarding_completed=data.get("onboarding_completed", True),
+                is_registered=data.get("is_registered", True),
+                tenant_active=data.get("tenant_active", True),
+                subscription_status=data.get("subscription_status"),
+                has_active_subscription=data.get("has_active_subscription", False),
+                can_access_dashboard=data.get("can_access_dashboard", False),
+                can_interact_agent=data.get("can_interact_agent", False),
+                next_step=data.get("next_step", "register"),
             )
                 
         except httpx.RequestError as e:
