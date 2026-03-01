@@ -83,6 +83,47 @@ async def test_process_message_blocks_when_subscription_not_authorized(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_process_message_routes_access_web_button_click(monkeypatch):
+    """Access web quick action should be handled directly, not re-gated."""
+    access_button_called = False
+
+    class _FakeResolver:
+        async def resolve(self, phone: str):  # noqa: ARG002
+            return None
+
+        def invalidate_cache(self, phone: str) -> None:  # noqa: ARG002
+            return None
+
+    async def _fake_handle_access_web_button_click(message, phone_info, whatsapp):  # noqa: ARG001
+        nonlocal access_button_called
+        access_button_called = True
+
+    async def _fail_unregistered_handler(message, whatsapp):  # noqa: ARG001
+        raise AssertionError("No debería re-ejecutar el flujo de no registrado al tocar el botón")
+
+    monkeypatch.setattr(webhook_module, "get_whatsapp_client", lambda: _FakeWhatsAppClient())
+    monkeypatch.setattr(webhook_module, "get_phone_resolver", lambda: _FakeResolver())
+    monkeypatch.setattr(webhook_module, "_handle_access_web_button_click", _fake_handle_access_web_button_click)
+    monkeypatch.setattr(webhook_module, "_handle_unregistered_user", _fail_unregistered_handler)
+    monkeypatch.setattr(webhook_module, "_is_rate_limited", lambda *args, **kwargs: False)
+
+    message = IncomingMessage(
+        message_id="msg-access-cta-1",
+        phone="5491111111111",
+        text="Ir a la web",
+        timestamp=datetime.now(timezone.utc),
+        contact_name="Pablo",
+        is_interactive=True,
+        interactive_type="button_reply",
+        interactive_id=webhook_module.ACCESS_WEB_BUTTON_ID,
+    )
+
+    await webhook_module.process_message(message)
+
+    assert access_button_called is True
+
+
+@pytest.mark.asyncio
 async def test_handle_unregistered_user_sends_aira_copy_and_button(monkeypatch):
     """Unregistered users should receive Aira copy + web quick-action button."""
 

@@ -291,6 +291,11 @@ async def process_message(message: IncomingMessage) -> None:
         phone_resolver = get_phone_resolver()
         phone_info = await phone_resolver.resolve(message.phone)
 
+        # Handle access CTA button clicks before normal gating flow.
+        if message.is_interactive and message.interactive_id == ACCESS_WEB_BUTTON_ID:
+            await _handle_access_web_button_click(message, phone_info, whatsapp)
+            return
+
         if not phone_info:
             logger.info("unregistered_phone_onboarding", phone=message.phone)
             await _handle_unregistered_user(message, whatsapp)
@@ -531,6 +536,86 @@ async def _send_redirect_with_web_button(
     await whatsapp.send_text(phone, fallback_text)
 
 
+async def _fetch_unregistered_onboarding_url(phone: str) -> tuple[str | None, bool]:
+    """Fetch signed web onboarding URL for an unregistered phone."""
+    phone_e164 = phone if phone.startswith("+") else f"+{phone}"
+    backend = get_backend_client()
+    response = await backend.post(
+        "/api/v1/onboarding/web-link",
+        json={"phone": phone_e164},
+        timeout=15.0,
+    )
+    data = response.json() if response.content else {}
+
+    if response.status_code == 200 and data.get("url"):
+        return str(data["url"]), False
+    if data.get("already_registered"):
+        return None, True
+    return None, False
+
+
+async def _handle_access_web_button_click(
+    message: IncomingMessage,
+    phone_info,
+    whatsapp,
+) -> None:
+    """Respond to access CTA button with direct URL text."""
+    try:
+        settings = get_settings()
+        url: str | None = None
+        text: str
+        mode: str
+
+        if not phone_info:
+            url, already_registered = await _fetch_unregistered_onboarding_url(message.phone)
+            if already_registered:
+                text = "Este número ya está registrado en otro hogar. Si tenés problemas para ingresar, contactá soporte."
+                mode = "access_button_already_registered"
+            elif url:
+                text = f"Abrí la web desde acá:\n{url}"
+                mode = "access_button_unregistered"
+            else:
+                text = "No pude generar el acceso web ahora. Intentá de nuevo en unos segundos."
+                mode = "access_button_failed"
+        elif not phone_info.onboarding_completed:
+            url = f"{settings.frontend_url.rstrip('/')}/onboarding"
+            text = f"Abrí la web desde acá:\n{url}"
+            mode = "access_button_setup"
+        elif not phone_info.has_active_subscription:
+            url = f"{settings.frontend_url.rstrip('/')}/contratar"
+            text = f"Abrí la web desde acá:\n{url}"
+            mode = "access_button_subscription"
+        else:
+            url = f"{settings.frontend_url.rstrip('/')}/dashboard"
+            text = f"Ya tenés acceso habilitado. Si querés, entrá acá:\n{url}"
+            mode = "access_button_authorized"
+
+        await whatsapp.send_text(message.phone, text)
+
+        interaction_logger = InteractionLogger()
+        await interaction_logger.log(
+            tenant_id=phone_info.tenant_id if phone_info else None,
+            user_phone=message.phone,
+            user_name=(phone_info.user_name if phone_info else None) or message.contact_name,
+            message_in=message.text or "",
+            message_out=text,
+            agent_used="access_web_button",
+            tokens_in=0,
+            tokens_out=0,
+            response_time_ms=0,
+            metadata={"mode": mode, "cta_url": url, "quick_action_selected": ACCESS_WEB_BUTTON_ID},
+        )
+    except Exception as e:
+        logger.error("Error handling access web button click", phone=message.phone, error=str(e))
+        try:
+            await whatsapp.send_text(
+                message.phone,
+                "Hubo un problema abriendo el acceso web. Intentá de nuevo en unos segundos.",
+            )
+        except Exception:
+            logger.error("Failed to send error message for access web button")
+
+
 async def _handle_setup_user(
     message: IncomingMessage,
     phone_info,
@@ -667,17 +752,9 @@ async def _handle_unregistered_user(
     or conversational onboarding.
     """
     try:
-        # Backend expects E.164 with leading '+' (WebLinkRequest validator)
-        phone_e164 = message.phone if message.phone.startswith("+") else f"+{message.phone}"
-        backend = get_backend_client()
-        response = await backend.post(
-            "/api/v1/onboarding/web-link",
-            json={"phone": phone_e164},
-            timeout=15.0,
-        )
-        data = response.json() if response.content else {}
+        url, already_registered = await _fetch_unregistered_onboarding_url(message.phone)
 
-        if response.status_code == 200 and data.get("url"):
+        if url:
             name = (message.contact_name or "").strip() or None
             greeting = f"Hola {name}! 👋" if name else "Hola! 👋"
             text = (
@@ -690,9 +767,9 @@ async def _handle_unregistered_user(
                 whatsapp=whatsapp,
                 phone=message.phone,
                 text=text,
-                cta_url=data["url"],
+                cta_url=url,
             )
-        elif data.get("already_registered"):
+        elif already_registered:
             text = "Este número ya está registrado en otro hogar. Si tenés problemas para ingresar, contactá soporte."
             await whatsapp.send_text(message.phone, text)
         else:
@@ -713,8 +790,8 @@ async def _handle_unregistered_user(
             response_time_ms=0,
             metadata={
                 "mode": "unregistered_redirect",
-                "cta_url": data.get("url"),
-                "quick_actions_offered": [ACCESS_WEB_BUTTON_ID] if data.get("url") else [],
+                "cta_url": url,
+                "quick_actions_offered": [ACCESS_WEB_BUTTON_ID] if url else [],
             },
         )
         logger.info("Unregistered user redirected to web onboarding", phone=message.phone)
