@@ -189,10 +189,10 @@ async def test_handle_unregistered_user_sends_aira_copy_and_link(monkeypatch):
 
     class _FakeResponse:
         status_code = 200
-        content = b'{"url":"https://app.example.com/onboarding?token=abc"}'
+        content = b'{"url":"https://app.example.com/onboarding/start/abc"}'
 
         def json(self) -> dict:
-            return {"url": "https://app.example.com/onboarding?token=abc"}
+            return {"url": "https://app.example.com/onboarding/start/abc"}
 
     class _FakeBackend:
         async def post(self, *args, **kwargs):  # noqa: ARG002
@@ -226,7 +226,7 @@ async def test_handle_unregistered_user_sends_aira_copy_and_link(monkeypatch):
     text = whatsapp.sent_texts[0][1]
     assert "Aira pone tu hogar en un solo lugar" in text
     assert "Para empezar o conocer más, ingresá a la web:" in text
-    assert "https://dev.aira-home.io/onboarding?token=abc" in text
+    assert "https://dev.aira-home.io/onboarding/start/abc" in text
     assert "Cuando termines, volvé a escribirme." in text
 
     assert len(whatsapp.sent_buttons) == 0
