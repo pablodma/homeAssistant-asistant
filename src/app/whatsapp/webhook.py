@@ -40,7 +40,7 @@ _rate_limit_store: dict[str, list[float]] = {}
 ACCESS_WEB_BUTTON_ID = "access_open_web"
 ACCESS_WEB_BUTTON_TITLE = "ir a la web"
 PRODUCTION_FRONTEND_URL = "https://aira-home.io"
-DEVELOPMENT_FRONTEND_URL = "https://dev.aira-home.io"
+DEVELOPMENT_FRONTEND_URL = "https://home-assistant-frontend-brown.vercel.app"
 
 
 def _is_rate_limited(phone: str, max_per_minute: int = 20) -> bool:

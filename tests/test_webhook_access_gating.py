@@ -226,7 +226,7 @@ async def test_handle_unregistered_user_sends_aira_copy_and_link(monkeypatch):
     text = whatsapp.sent_texts[0][1]
     assert "Aira pone tu hogar en un solo lugar" in text
     assert "Para empezar o conocer más, ingresá a la web:" in text
-    assert "https://dev.aira-home.io/onboarding/start/abc" in text
+    assert "https://home-assistant-frontend-brown.vercel.app/onboarding/start/abc" in text
     assert "Cuando termines, volvé a escribirme." in text
 
     assert len(whatsapp.sent_buttons) == 0
@@ -286,7 +286,7 @@ async def test_handle_subscription_required_user_sends_button_and_updated_copy(
     assert len(whatsapp.sent_texts) == 1
     text = whatsapp.sent_texts[0][1]
     assert expected_fragment in text
-    assert "https://dev.aira-home.io/contratar" in text
+    assert "https://home-assistant-frontend-brown.vercel.app/contratar" in text
     assert "Cuando termines, volvé a escribirme." in text
 
     assert len(whatsapp.sent_buttons) == 0
@@ -335,7 +335,7 @@ async def test_handle_setup_user_sends_link(monkeypatch):
     assert len(whatsapp.sent_texts) == 1
     text = whatsapp.sent_texts[0][1]
     assert "Completá la configuración de tu hogar en la web:" in text
-    assert "https://dev.aira-home.io/onboarding" in text
+    assert "https://home-assistant-frontend-brown.vercel.app/onboarding" in text
     assert "Cuando termines, volvé a escribirme." in text
 
     assert len(whatsapp.sent_buttons) == 0
