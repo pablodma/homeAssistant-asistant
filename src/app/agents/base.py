@@ -89,10 +89,12 @@ class BaseAgent(ABC):
                 status=resp.status_code,
                 agent=self.name,
             )
-            return False
+            # Prefer onboarding guidance when status cannot be verified.
+            return True
         except Exception:
             logger.exception("Error checking first-time status", agent=self.name)
-            return False
+            # Fail open to first-time flow on transient backend/network errors.
+            return True
 
     async def complete_first_time(self, phone: str) -> str:
         """Mark first-time onboarding as complete for this agent.

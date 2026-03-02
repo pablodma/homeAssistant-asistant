@@ -648,8 +648,21 @@ class FinanceAgent(BaseAgent):
             amount = args.get("amount", 0)
             category = args.get("category", "")
             budget_status = data.get("budget_status")
-            
-            response = data.get("message") or f"✅ Registré un gasto de ${amount:,.0f} en {category}."
+            assigned_group = data.get("assigned_group")
+            assigned_subcategory = data.get("assigned_subcategory") or category
+
+            response = data.get("message")
+            if not response:
+                assignment_line = (
+                    f"📌 Lo asigné a {assigned_group} > {assigned_subcategory}."
+                    if assigned_group
+                    else f"📌 Lo asigné a {assigned_subcategory}."
+                )
+                response = f"✅ Registré un gasto de ${amount:,.0f}.\n{assignment_line}"
+                if assigned_group:
+                    response += f"\n👉 ¿Querés definir o ajustar el presupuesto mensual de {assigned_group}?"
+                else:
+                    response += "\n👉 ¿Querés ver el resumen del mes o cargar otro gasto?"
             
             if budget_status:
                 remaining = float(budget_status.get("remaining", 0))
@@ -658,12 +671,12 @@ class FinanceAgent(BaseAgent):
                 pct = float(budget_status.get("percentage_used", 0))
                 
                 if pct >= 100:
-                    response += f"\n\n🔴 Presupuesto EXCEDIDO en {category}."
+                    response += f"\n\n🔴 Presupuesto EXCEDIDO en {assigned_subcategory}."
                     response += f"\n   Límite: ${limit:,.0f} | Gastado: ${spent:,.0f}"
                 elif pct >= 80:
-                    response += f"\n\n⚠️ Te quedan ${remaining:,.0f} de ${limit:,.0f} en {category} ({pct:.0f}%)"
+                    response += f"\n\n⚠️ Te quedan ${remaining:,.0f} de ${limit:,.0f} en {assigned_subcategory} ({pct:.0f}%)"
                 else:
-                    response += f"\n\n💰 Te quedan ${remaining:,.0f} de ${limit:,.0f} en {category} ({pct:.0f}%)"
+                    response += f"\n\n💰 Te quedan ${remaining:,.0f} de ${limit:,.0f} en {assigned_subcategory} ({pct:.0f}%)"
             
             return response
 

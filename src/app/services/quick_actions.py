@@ -30,7 +30,7 @@ def build_finance_expense_quick_actions(expense_id: str) -> QuickActionsPayload:
         "actions": [
             {"id": f"fin_expense_edit:{expense_id}", "title": "Editar gasto"},
             {"id": f"fin_expense_delete:{expense_id}", "title": "Cancelar gasto"},
-            {"id": "fin_menu", "title": "Ir al menu"},
+            {"id": "fin_summary_month", "title": "Ver resumen"},
         ],
     }
 
@@ -39,7 +39,7 @@ def build_finance_expense_quick_actions(expense_id: str) -> QuickActionsPayload:
 class ParsedQuickAction:
     """Parsed quick action identifier from WhatsApp interactive reply."""
 
-    kind: Literal["expense_edit", "expense_delete", "menu"]
+    kind: Literal["expense_edit", "expense_delete", "summary"]
     expense_id: Optional[str] = None
 
 
@@ -48,8 +48,8 @@ def parse_quick_action_id(action_id: str | None) -> Optional[ParsedQuickAction]:
     if not action_id:
         return None
 
-    if action_id == "fin_menu":
-        return ParsedQuickAction(kind="menu", expense_id=None)
+    if action_id in ("fin_summary_month", "fin_menu"):
+        return ParsedQuickAction(kind="summary", expense_id=None)
 
     if action_id.startswith("fin_expense_edit:"):
         return ParsedQuickAction(

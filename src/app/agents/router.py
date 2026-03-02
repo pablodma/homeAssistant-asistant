@@ -244,10 +244,15 @@ class RouterAgent(BaseAgent):
 
                     try:
                         args = json.loads(tool_call.function.arguments)
-                        user_request = args.get("user_request", message)
+                        user_request_raw = args.get("user_request", message)
+                        user_request = (
+                            user_request_raw
+                            if isinstance(user_request_raw, str) and user_request_raw.strip()
+                            else message
+                        )
 
                         result = await sub_agent.process(
-                            message=message,
+                            message=user_request,
                             phone=phone,
                             tenant_id=tenant_id,
                             history=history,

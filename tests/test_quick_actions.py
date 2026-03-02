@@ -30,10 +30,15 @@ def test_parse_quick_action_id_variants():
     assert parsed_delete.kind == "expense_delete"
     assert parsed_delete.expense_id == "def"
 
-    parsed_menu = parse_quick_action_id("fin_menu")
-    assert parsed_menu is not None
-    assert parsed_menu.kind == "menu"
-    assert parsed_menu.expense_id is None
+    parsed_summary = parse_quick_action_id("fin_summary_month")
+    assert parsed_summary is not None
+    assert parsed_summary.kind == "summary"
+    assert parsed_summary.expense_id is None
+
+    parsed_legacy_menu = parse_quick_action_id("fin_menu")
+    assert parsed_legacy_menu is not None
+    assert parsed_legacy_menu.kind == "summary"
+    assert parsed_legacy_menu.expense_id is None
 
     assert parse_quick_action_id("unknown_action") is None
 

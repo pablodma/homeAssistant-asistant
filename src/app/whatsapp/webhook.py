@@ -287,10 +287,10 @@ async def process_message(message: IncomingMessage) -> None:
                     message = message.model_copy(
                         update={"text": f"Editar gasto con expense_id={parsed_action.expense_id}"}
                     )
-                elif parsed_action.kind == "menu":
+                elif parsed_action.kind == "summary":
                     clear_pending_expense_edit(message.phone)
                     message = message.model_copy(
-                        update={"text": "Quiero volver al menú principal de finanzas."}
+                        update={"text": "Mostrame el resumen de gastos del mes."}
                     )
 
         # If there is pending edit context, append it to next user message.
@@ -382,29 +382,29 @@ async def process_message(message: IncomingMessage) -> None:
         output_check = check_response(result.response, agent_name=result.sub_agent_used or result.agent_used)
         response_text = output_check.text
 
-        await whatsapp.send_text(message.phone, response_text)
-
-        # Send quick actions when agent metadata provides them.
+        # Send response and quick actions in one interactive message when possible.
         metadata = result.metadata or {}
         quick_actions = metadata.get("quick_actions") if isinstance(metadata, dict) else None
         if quick_actions and isinstance(quick_actions, dict):
             actions = quick_actions.get("actions") or []
             if isinstance(actions, list) and actions:
                 if len(actions) <= 3:
-                    await whatsapp.send_interactive_buttons(
+                    sent = await whatsapp.send_interactive_buttons(
                         phone=message.phone,
-                        body="Elegí una acción rápida:",
+                        body=response_text,
                         buttons=[
                             {"id": str(action.get("id", "")), "title": str(action.get("title", ""))}
                             for action in actions
                             if action.get("id") and action.get("title")
                         ],
                     )
+                    if not sent:
+                        await whatsapp.send_text(message.phone, response_text)
                 else:
-                    await whatsapp.send_interactive_list(
+                    sent = await whatsapp.send_interactive_list(
                         phone=message.phone,
                         header="Acciones rápidas",
-                        body="Elegí una opción",
+                        body=response_text,
                         button_text="Ver opciones",
                         sections=[
                             {
@@ -420,6 +420,12 @@ async def process_message(message: IncomingMessage) -> None:
                             }
                         ],
                     )
+                    if not sent:
+                        await whatsapp.send_text(message.phone, response_text)
+            else:
+                await whatsapp.send_text(message.phone, response_text)
+        else:
+            await whatsapp.send_text(message.phone, response_text)
 
         # Save to conversation history
         await conversation_service.add_message(
