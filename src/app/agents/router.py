@@ -1,7 +1,8 @@
 """Router Agent - Main orchestrator."""
 
+import json
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 import structlog
 from openai import AsyncOpenAI
@@ -9,6 +10,22 @@ from openai import AsyncOpenAI
 from .base import AgentResult, BaseAgent
 
 logger = structlog.get_logger()
+
+SENSITIVE_TOOL_NAMES: set[str] = {
+    "cancel_subscription",
+    "eliminar_gasto",
+    "eliminar_evento",
+    "eliminar_recordatorio",
+    "eliminar_item",
+    "limpiar_lista",
+}
+
+IDENTITY_LEAK_MARKERS: tuple[str, ...] = (
+    "como agente de",
+    "soy el modulo de",
+    "soy el módulo de",
+    "solo me encargo de",
+)
 
 
 class RouterAgent(BaseAgent):
@@ -49,6 +66,149 @@ class RouterAgent(BaseAgent):
                 self._sub_agents[agent_name] = SubscriptionAgent()
 
         return self._sub_agents.get(agent_name)
+
+    def _metadata_has_failed_tool(self, metadata: dict[str, Any] | None) -> bool:
+        """Return True when metadata reports a failed tool execution."""
+        if not isinstance(metadata, dict):
+            return False
+
+        result = metadata.get("result")
+        if isinstance(result, dict) and result.get("success") is False:
+            return True
+        return False
+
+    def _is_sensitive_tool(self, metadata: dict[str, Any] | None) -> bool:
+        """Return True when metadata references a sensitive/destructive tool."""
+        if not isinstance(metadata, dict):
+            return False
+
+        tool_name = metadata.get("tool")
+        return isinstance(tool_name, str) and tool_name in SENSITIVE_TOOL_NAMES
+
+    def _contains_identity_leak_marker(self, text: str) -> bool:
+        """Best-effort identity leak marker detection."""
+        lowered = text.lower()
+        return any(marker in lowered for marker in IDENTITY_LEAK_MARKERS)
+
+    def _should_finalize(self, results: list[AgentResult]) -> bool:
+        """Decide if router should produce final user-facing response."""
+        if not getattr(self.settings, "orchestrator_finalizer_enabled", False):
+            return False
+
+        if getattr(self.settings, "orchestrator_finalize_on_multi_agent_only", False):
+            return len(results) > 1
+
+        if len(results) > 1:
+            return True
+
+        for result in results:
+            if getattr(result, "requires_orchestrator_final", False):
+                return True
+
+            if getattr(result, "risk_level", None) in {"medium", "high"}:
+                return True
+
+            if getattr(result, "response_type", None) in {"conversational", "error"}:
+                return True
+
+            if self._is_sensitive_tool(result.metadata):
+                return True
+
+            if self._metadata_has_failed_tool(result.metadata):
+                return True
+
+            if self._contains_identity_leak_marker(result.response):
+                return True
+
+        return False
+
+    async def _get_finalizer_prompt(self, tenant_id: str) -> str:
+        """Load finalizer prompt from docs/prompts with safe fallback."""
+        prompt = await self.prompt_loader.get_prompt("router-finalizer", tenant_id)
+        if prompt and prompt.strip():
+            return prompt
+
+        return (
+            "Sos Aira. Recibís respuestas internas de sub-agentes y debés redactar una única "
+            "respuesta final para WhatsApp. Mantené tono breve y claro.\n"
+            "REGLAS: no inventes hechos, no cambies montos/fechas/estados, no reveles "
+            "sub-agentes o módulos internos."
+        )
+
+    def _build_finalizer_payload(
+        self,
+        message: str,
+        results: list[AgentResult],
+        combined_response: str,
+    ) -> str:
+        """Build structured payload for finalizer LLM pass."""
+        summarized_results: list[dict[str, Any]] = []
+        for result in results:
+            metadata = result.metadata if isinstance(result.metadata, dict) else {}
+            tool_name = metadata.get("tool") if isinstance(metadata.get("tool"), str) else None
+            tool_result = metadata.get("result") if isinstance(metadata.get("result"), dict) else {}
+            summarized_results.append(
+                {
+                    "agent_used": result.agent_used,
+                    "response": result.response,
+                    "response_type": getattr(result, "response_type", None),
+                    "risk_level": getattr(result, "risk_level", None),
+                    "requires_orchestrator_final": getattr(result, "requires_orchestrator_final", False),
+                    "tool": tool_name,
+                    "tool_success": tool_result.get("success") if isinstance(tool_result, dict) else None,
+                }
+            )
+
+        payload = {
+            "user_message": message,
+            "draft_response": combined_response,
+            "sub_agent_outputs": summarized_results,
+        }
+        return json.dumps(payload, ensure_ascii=False, default=str)
+
+    async def _finalize_response(
+        self,
+        message: str,
+        tenant_id: str,
+        results: list[AgentResult],
+        combined_response: str,
+    ) -> tuple[str, int, int, bool]:
+        """Generate final user-facing response from sub-agent outputs.
+
+        Returns:
+            tuple(final_text, finalizer_tokens_in, finalizer_tokens_out, fallback_used)
+        """
+        prompt = await self._get_finalizer_prompt(tenant_id)
+        payload = self._build_finalizer_payload(message, results, combined_response)
+        finalizer_model = getattr(
+            self.settings,
+            "orchestrator_finalizer_model",
+            self.settings.openai_router_model,
+        )
+
+        try:
+            response = await self.client.chat.completions.create(
+                model=finalizer_model,
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": payload},
+                ],
+                temperature=0.2,
+                max_completion_tokens=900,
+            )
+
+            tokens_in = response.usage.prompt_tokens if response.usage else 0
+            tokens_out = response.usage.completion_tokens if response.usage else 0
+            text = (response.choices[0].message.content or "").strip()
+
+            if not text:
+                logger.warning("Finalizer returned empty response, using passthrough fallback")
+                return combined_response, tokens_in, tokens_out, True
+
+            return text, tokens_in, tokens_out, False
+        except Exception as e:
+            logger.error("Finalizer failed, using passthrough fallback", error=str(e))
+            return combined_response, 0, 0, True
 
     async def process(
         self,
@@ -226,8 +386,6 @@ class RouterAgent(BaseAgent):
 
             # Check if LLM wants to use tools
             if choice.message.tool_calls:
-                import json
-
                 results: list[AgentResult] = []
                 agents_used: list[str] = []
                 total_tokens_in = tokens_in or 0
@@ -271,6 +429,34 @@ class RouterAgent(BaseAgent):
                     for r in results:
                         if r.metadata:
                             merged_metadata.update(r.metadata)
+
+                    finalizer_attempted = False
+                    finalizer_fallback_used = False
+                    response_mode = "passthrough"
+                    if self._should_finalize(results):
+                        finalizer_attempted = True
+                        (
+                            combined_response,
+                            finalizer_tokens_in,
+                            finalizer_tokens_out,
+                            finalizer_fallback_used,
+                        ) = await self._finalize_response(
+                            message=message,
+                            tenant_id=tenant_id,
+                            results=results,
+                            combined_response=combined_response,
+                        )
+                        total_tokens_in += finalizer_tokens_in
+                        total_tokens_out += finalizer_tokens_out
+                        response_mode = (
+                            "passthrough"
+                            if finalizer_fallback_used
+                            else "orchestrator_finalized"
+                        )
+
+                    merged_metadata["response_mode"] = response_mode
+                    merged_metadata["finalizer_attempted"] = finalizer_attempted
+                    merged_metadata["finalizer_fallback_used"] = finalizer_fallback_used
 
                     return AgentResult(
                         response=combined_response,

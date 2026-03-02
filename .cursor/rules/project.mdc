@@ -36,6 +36,7 @@ globs:
 │  │                    ROUTER AGENT                           │   │
 │  │  - LLM con tool calling (100% prompt-driven)             │   │
 │  │  - Decide qué sub-agente usar                            │   │
+│  │  - Respuesta final híbrida (passthrough + finalizer)     │   │
 │  │  - Ver ADR-002: docs/architecture/decisions/             │   │
 │  └────────────────────────┬─────────────────────────────────┘   │
 │                           │                                      │
@@ -81,6 +82,7 @@ homeai-assis/
 │   ├── finance-agent.md          # Prompt del agente de finanzas
 │   ├── calendar-agent.md         # Prompt del agente de calendario
 │   ├── router-agent.md           # Prompt del orquestador
+│   ├── router-finalizer-agent.md # Prompt de finalización del orquestador
 │   ├── qa-agent.md               # Prompt del agente de QA
 │   └── ...
 ├── src/app/
@@ -116,7 +118,12 @@ homeai-assis/
 ### Router Agent (Orquestador)
 - **Función**: Decide qué sub-agente debe manejar cada mensaje
 - **Método**: LLM-only con tool calling (gpt-4.1-nano) - Ver ADR-002
+- **Salida híbrida**:
+  - `passthrough` por defecto para respuestas determinísticas simples
+  - `orchestrator_finalized` cuando hay múltiples sub-agentes o mayor riesgo
+  - fallback automático a passthrough si falla el finalizer
 - **Prompt**: `docs/prompts/router-agent.md`
+- **Prompt finalizer**: `docs/prompts/router-finalizer-agent.md`
 
 ### QA Agent (Control de Calidad)
 - **Función**: Analiza cada interacción para detectar problemas de calidad
@@ -244,6 +251,11 @@ await quality_logger.log_soft_error(
 | `WHATSAPP_VERIFY_TOKEN` | Token para verificar webhook | ✅ |
 | `WHATSAPP_ACCESS_TOKEN` | Token de Meta Business API | ✅ |
 | `OPENAI_API_KEY` | API key de OpenAI | ✅ |
+| `OPENAI_MODEL` | Modelo para sub-agentes | ✅ |
+| `OPENAI_ROUTER_MODEL` | Modelo para ruteo del orquestador | ✅ |
+| `ORCHESTRATOR_FINALIZER_ENABLED` | Habilita finalización híbrida | ❌ |
+| `ORCHESTRATOR_FINALIZE_ON_MULTI_AGENT_ONLY` | Limita finalizer a casos multi-agente | ❌ |
+| `ORCHESTRATOR_FINALIZER_MODEL` | Modelo de finalización del orquestador | ❌ |
 | `DATABASE_URL` | PostgreSQL (interno Railway) | ✅ |
 | `DATABASE_PUBLIC_URL` | PostgreSQL (acceso externo) | Para migraciones |
 | `BACKEND_API_URL` | URL del backend | ✅ |
@@ -311,6 +323,7 @@ docs/prompts/
 ├── finance-agent.md    # Agente de finanzas
 ├── calendar-agent.md   # Agenda Agent (eventos + recordatorios)
 ├── router-agent.md     # Orquestador principal
+├── router-finalizer-agent.md # Finalizador de respuesta del orquestador
 ├── qa-agent.md         # Control de calidad
 └── ...
 ```

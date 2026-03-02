@@ -41,9 +41,9 @@ Usuario (WhatsApp)
 │       │         │
 │  ┌────┴────┐    │
 │  ▼    ▼    ▼    │
-│ Finance Calendar│
-│ Reminder Shop   │
-│ Vehicle         │
+│ Finance Agenda  │
+│ Shopping Vehicle│
+│ Subscription    │
 └────────┬────────┘
          │ HTTP
          ▼
@@ -53,16 +53,24 @@ Usuario (WhatsApp)
 └─────────────────┘
 ```
 
+### Salida final híbrida del orquestador
+
+El RouterAgent usa una política híbrida para responder al usuario:
+- **Passthrough** por defecto para respuestas simples/determinísticas.
+- **Finalización por orquestador** cuando hay múltiples sub-agentes o mayor riesgo.
+- **Fallback automático a passthrough** si la finalización falla.
+
 ## Agentes
 
 | Agente | Descripción | Prompt |
 |--------|-------------|--------|
 | Router | Orquestador principal, decide qué sub-agente usar | `docs/prompts/router-agent.md` |
+| Router Finalizer | Redacción final unificada cuando aplica política híbrida | `docs/prompts/router-finalizer-agent.md` |
 | Finance | Gestión de gastos y presupuestos | `docs/prompts/finance-agent.md` |
-| Calendar | Eventos y sincronización con Google Calendar | `docs/prompts/calendar-agent.md` |
-| Reminder | Recordatorios y alertas | `docs/prompts/reminder-agent.md` |
+| Agenda | Eventos, recordatorios y sincronización con Google Calendar | `docs/prompts/calendar-agent.md` |
 | Shopping | Listas de compras | `docs/prompts/shopping-agent.md` |
 | Vehicle | Gestión de vehículos y mantenimiento | `docs/prompts/vehicle-agent.md` |
+| Subscription | Gestión de plan, uso, upgrade/cancelación e invitaciones | `docs/prompts/subscription-agent.md` |
 
 ## Prompts de Agentes
 
@@ -75,11 +83,12 @@ La lógica de decisión de los agentes vive en los prompts, NO en código Python
 ```
 docs/prompts/
 ├── router-agent.md     # Cómo decide qué sub-agente usar
+├── router-finalizer-agent.md # Cómo sintetiza la respuesta final
 ├── finance-agent.md    # Reglas para registrar gastos, presupuestos
 ├── calendar-agent.md   # Manejo de eventos y agenda
-├── reminder-agent.md   # Recordatorios y alertas
 ├── shopping-agent.md   # Listas de compras
 ├── vehicle-agent.md    # Gestión de vehículos
+├── subscription-agent.md # Gestión de suscripción y miembros
 └── qa-agent.md         # Control de calidad
 ```
 
@@ -132,6 +141,11 @@ Luego configura la URL en Meta Business Portal.
 | `WHATSAPP_VERIFY_TOKEN` | Token para verificar webhook | ✅ |
 | `WHATSAPP_ACCESS_TOKEN` | Token de acceso de Meta | ✅ |
 | `OPENAI_API_KEY` | API key de OpenAI | ✅ |
+| `OPENAI_MODEL` | Modelo para sub-agentes | ❌ |
+| `OPENAI_ROUTER_MODEL` | Modelo para ruteo del orquestador | ❌ |
+| `ORCHESTRATOR_FINALIZER_ENABLED` | Habilita finalización híbrida del router | ❌ |
+| `ORCHESTRATOR_FINALIZE_ON_MULTI_AGENT_ONLY` | Limita finalizer a casos multi-agente | ❌ |
+| `ORCHESTRATOR_FINALIZER_MODEL` | Modelo para la pasada de finalización | ❌ |
 | `DATABASE_URL` | PostgreSQL connection string | ✅ |
 | `BACKEND_API_URL` | URL del backend API | ✅ |
 | `BACKEND_API_KEY` | API key para el backend | ✅ |

@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     openai_api_key: str
     openai_model: str = "gpt-4.1-mini"  # Sub-agents (finance, calendar, etc.)
     openai_router_model: str = "gpt-4.1-nano"  # Router agent (fast classification)
+    orchestrator_finalizer_enabled: bool = False
+    orchestrator_finalize_on_multi_agent_only: bool = True
+    orchestrator_finalizer_model: str = "gpt-4.1-nano"
     whisper_model: str = "whisper-1"
 
     # Anthropic (used by QA and Prompt Improver agents)

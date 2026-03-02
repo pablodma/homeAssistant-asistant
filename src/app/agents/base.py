@@ -36,7 +36,10 @@ class AgentResult:
     sub_agent_used: Optional[str] = None
     tokens_in: Optional[int] = None
     tokens_out: Optional[int] = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: Optional[dict[str, Any]] = field(default_factory=dict)
+    response_type: Optional[str] = None
+    risk_level: Optional[str] = None
+    requires_orchestrator_final: bool = False
 
 
 class BaseAgent(ABC):
