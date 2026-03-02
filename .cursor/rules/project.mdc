@@ -147,6 +147,9 @@ homeai-assis/
 | **Vehicle** | PostgreSQL directo | `docs/prompts/vehicle-agent.md` |
 | **Subscription** | Backend API | `docs/prompts/subscription-agent.md` |
 
+**Nota Finance (registro de gasto):**
+- Si el usuario ya provee monto + concepto y el concepto matchea una subcategoría existente, el flujo debe poder resolver y registrar el gasto en el mismo turno (encadenando `listar_categorias` -> `registrar_gasto`), sin cortar en la lista.
+
 ## Comunicación con Backend
 
 El bot llama al backend para Finance y Agenda (calendar + reminders):

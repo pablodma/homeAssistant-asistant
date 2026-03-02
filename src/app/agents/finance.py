@@ -424,8 +424,15 @@ class FinanceAgent(BaseAgent):
                     }
                 )
 
-                # These tools need LLM follow-up: continue loop so it can reason
-                if tool_name in ("consultar_presupuesto", "completar_configuracion_inicial"):
+                # These tools need LLM follow-up: continue loop so it can reason.
+                # `listar_categorias` must continue too, so the model can map the
+                # user's concept to an existing subcategory and then call
+                # `registrar_gasto` in the same turn when possible.
+                if tool_name in (
+                    "consultar_presupuesto",
+                    "completar_configuracion_inicial",
+                    "listar_categorias",
+                ):
                     continue
 
                 # Other tools: return formatted response
