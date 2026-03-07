@@ -1,12 +1,15 @@
 """Quality Logger - Unified service for logging hard and soft errors."""
 
+import asyncio
 import traceback
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import uuid4
 
 import structlog
 
 from ..config.database import get_pool
+from ..config.settings import get_settings
 
 logger = structlog.get_logger()
 
@@ -146,7 +149,7 @@ class QualityLogger:
             agent_name=agent_name,
         )
 
-        return await self._persist_issue(
+        issue_id = await self._persist_issue(
             tenant_id=tenant_id,
             issue_type="soft_error",
             issue_category=category,
@@ -163,6 +166,12 @@ class QualityLogger:
             qa_confidence=qa_confidence,
             correlation_id=correlation_id,
         )
+
+        # Auto-trigger QA review if threshold reached
+        if issue_id and tenant_id:
+            await self._check_auto_trigger(tenant_id)
+
+        return issue_id
 
     async def _persist_issue(
         self,
@@ -260,6 +269,96 @@ class QualityLogger:
                 category=issue_category,
             )
             return None
+
+    async def _check_auto_trigger(self, tenant_id: str) -> None:
+        """Check if unresolved issue count exceeds threshold and trigger auto-review."""
+        try:
+            settings = get_settings()
+            if not settings.qa_review_auto_trigger_enabled:
+                return
+
+            pool = await get_pool()
+
+            # Count unresolved soft errors for this tenant
+            count = await pool.fetchval(
+                """
+                SELECT COUNT(*) FROM quality_issues
+                WHERE tenant_id = $1
+                  AND is_resolved = false
+                  AND issue_type = 'soft_error'
+                """,
+                tenant_id,
+            )
+
+            if count < settings.qa_review_auto_trigger_threshold:
+                return
+
+            # Check no review cycle is currently running for this tenant
+            running = await pool.fetchval(
+                """
+                SELECT COUNT(*) FROM qa_review_cycles
+                WHERE tenant_id = $1 AND status = 'running'
+                """,
+                tenant_id,
+            )
+
+            if running > 0:
+                return
+
+            # Check cooldown: skip if completed cycle in last 24h
+            recent = await pool.fetchval(
+                """
+                SELECT COUNT(*) FROM qa_review_cycles
+                WHERE tenant_id = $1
+                  AND status = 'completed'
+                  AND completed_at >= NOW() - INTERVAL '24 hours'
+                """,
+                tenant_id,
+            )
+
+            if recent > 0:
+                return
+
+            logger.info(
+                "Auto-triggering QA review (threshold reached)",
+                tenant_id=tenant_id,
+                unresolved_count=count,
+                threshold=settings.qa_review_auto_trigger_threshold,
+            )
+
+            asyncio.create_task(self._trigger_auto_review(tenant_id))
+
+        except Exception as e:
+            logger.error(
+                "Failed to check auto-trigger",
+                tenant_id=tenant_id,
+                error=str(e),
+            )
+
+    async def _trigger_auto_review(self, tenant_id: str) -> None:
+        """Fire-and-forget: run QA review for a tenant."""
+        try:
+            from .qa_reviewer import QABatchReviewer
+
+            settings = get_settings()
+            reviewer = QABatchReviewer()
+            result = await reviewer.run_review(
+                tenant_id=tenant_id,
+                triggered_by="auto-threshold",
+                days=settings.qa_review_cron_lookback_days,
+            )
+            logger.info(
+                "Auto-triggered QA review completed",
+                tenant_id=tenant_id,
+                cycle_id=result.get("cycle_id"),
+                improvements_applied=result.get("improvements_applied"),
+            )
+        except Exception as e:
+            logger.error(
+                "Auto-triggered QA review failed",
+                tenant_id=tenant_id,
+                error=str(e),
+            )
 
 
 # Singleton instance

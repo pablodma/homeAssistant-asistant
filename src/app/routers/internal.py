@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from ..config import get_settings
 from ..config.database import get_pool
+from ..crons.run_qa_review import run_qa_review_all
 from ..services.qa_reviewer import QABatchReviewer
 
 logger = structlog.get_logger()
@@ -240,6 +241,34 @@ async def trigger_qa_review_all(
             traceback=traceback.format_exc(),
         )
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =====================================================
+# CRON TRIGGER
+# =====================================================
+
+
+@router.post("/qa-review/cron", status_code=202)
+async def trigger_qa_review_cron(background_tasks: BackgroundTasks):
+    """Trigger the QA review cron manually (for testing without waiting for schedule).
+
+    Runs the same logic as the Railway cron: reviews all active tenants
+    that have enough unresolved issues and aren't on cooldown.
+    """
+    background_tasks.add_task(_run_cron_safe)
+    return {
+        "status": "accepted",
+        "message": "QA review cron triggered. Check logs for progress.",
+    }
+
+
+async def _run_cron_safe() -> None:
+    """Run cron with error handling for background task."""
+    try:
+        result = await run_qa_review_all()
+        logger.info("QA review cron task completed", result=result)
+    except Exception as e:
+        logger.error("QA review cron task failed", error=str(e))
 
 
 # =====================================================

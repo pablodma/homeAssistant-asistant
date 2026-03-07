@@ -40,10 +40,20 @@ class Settings(BaseSettings):
     # Anthropic (used by QA and Prompt Improver agents)
     anthropic_api_key: str = ""
     qa_model: str = "claude-sonnet-4-20250514"
-    qa_review_model: str = "claude-opus-4-6"
+    qa_review_model: str = "claude-opus-4-6"  # deprecated: use the split models below
+    qa_review_analysis_model: str = "claude-sonnet-4-20250514"  # Step 1: issue analysis (cheap)
+    qa_review_improvement_model: str = "claude-opus-4-6"  # Step 2: prompt generation (expensive)
     qa_review_max_improvements: int = 3
     qa_review_cooldown_hours: int = 24
     qa_review_min_issues: int = 2
+
+    # QA Review Cron
+    qa_review_cron_enabled: bool = True
+    qa_review_cron_lookback_days: int = 14
+
+    # QA Review Auto-trigger by threshold
+    qa_review_auto_trigger_enabled: bool = False
+    qa_review_auto_trigger_threshold: int = 10
 
     # GitHub API (for prompt editing by QA Reviewer)
     github_token: str = ""

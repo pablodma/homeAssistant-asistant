@@ -347,7 +347,7 @@ class QABatchReviewer:
     async def _run_analysis(self, filled_prompt: str) -> str:
         """Run Step 1: Claude analyzes issues using the QA Reviewer prompt."""
         async with self.client.messages.stream(
-            model=self.settings.qa_review_model,
+            model=self.settings.qa_review_analysis_model,
             max_tokens=8000,
             messages=[
                 {"role": "user", "content": filled_prompt},
@@ -602,7 +602,7 @@ class QABatchReviewer:
         # max_tokens=16000 to avoid truncation: the improved_prompt field contains
         # the full agent prompt which can be thousands of tokens when JSON-encoded.
         async with self.client.messages.stream(
-            model=self.settings.qa_review_model,
+            model=self.settings.qa_review_improvement_model,
             max_tokens=16000,
             system=PROMPT_IMPROVER_SYSTEM,
             messages=[
