@@ -430,8 +430,11 @@ class FinanceAgent(BaseAgent):
                 # `listar_categorias` must continue too, so the model can map the
                 # user's concept to an existing subcategory and then call
                 # `registrar_gasto` in the same turn when possible.
+                # `consultar_reporte` must continue so the LLM can craft a natural
+                # response to the user's question instead of a generic formatted report.
                 if tool_name in (
                     "consultar_presupuesto",
+                    "consultar_reporte",
                     "completar_configuracion_inicial",
                     "listar_categorias",
                 ):
