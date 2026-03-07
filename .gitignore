@@ -54,3 +54,6 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code agent instructions (live at project root level)
+CLAUDE.md
