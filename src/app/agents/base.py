@@ -181,4 +181,8 @@ class BaseAgent(ABC):
         Returns:
             List of dicts with role and content.
         """
-        return [{"role": msg.role, "content": msg.content} for msg in history]
+        return [
+            {"role": msg["role"], "content": msg["content"]} if isinstance(msg, dict)
+            else {"role": msg.role, "content": msg.content}
+            for msg in history
+        ]

@@ -243,11 +243,18 @@ class RouterAgent(BaseAgent):
 
         graph = await self._get_compiled_graph()
 
+        # Convert Message objects to plain dicts so the checkpointer
+        # can serialize the state (msgpack cannot handle custom classes).
+        serializable_history = [
+            msg.to_dict() if hasattr(msg, "to_dict") else {"role": msg.role, "content": msg.content}
+            for msg in history
+        ]
+
         initial_state: AgentState = {
             "message": message,
             "phone": phone,
             "tenant_id": tenant_id,
-            "history": history,
+            "history": serializable_history,
             "agent_result": None,
             "final_response": "",
             "block_reason": None,
@@ -423,7 +430,9 @@ class RouterAgent(BaseAgent):
         ]
 
         for msg in history[-6:]:
-            messages.append({"role": msg.role, "content": msg.content})
+            role = msg["role"] if isinstance(msg, dict) else msg.role
+            content = msg["content"] if isinstance(msg, dict) else msg.content
+            messages.append({"role": role, "content": content})
 
         messages.append({"role": "user", "content": f"[USER_MSG]{message}[/USER_MSG]"})
 
