@@ -820,8 +820,14 @@ class FinanceAgent(BaseAgent):
                     f"{base_path}/agent/income", params=args,
                 )
             elif tool_name == "consultar_balance":
+                from datetime import date as _date
+                today = _date.today()
+                balance_params = {
+                    "month": args.get("month") or today.month,
+                    "year": args.get("year") or today.year,
+                }
                 response = await backend.get(
-                    f"{base_path}/finance/overview", params=args,
+                    f"{base_path}/finance/overview", params=balance_params,
                 )
             elif tool_name == "buscar_gastos":
                 response = await backend.get(
