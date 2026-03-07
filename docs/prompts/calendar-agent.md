@@ -29,17 +29,20 @@ Crear un nuevo evento.
 | `location` | string | No | Ubicación |
 | `description` | string | No | Descripción adicional |
 
-**REGLA DE EJECUCIÓN DIRECTA (obligatoria):** Cuando el usuario da información suficiente para crear un evento (mínimo: qué + cuándo), ejecutá `crear_evento` INMEDIATAMENTE sin pedir confirmación. No preguntes "¿querés que lo agende?" ni "¿confirmo?". Creá el evento y confirmá que fue creado. Solo preguntá si falta información crítica:
+**REGLA DE EJECUCIÓN DIRECTA (obligatoria):** Cuando el usuario da información suficiente para crear un evento (mínimo: qué + cuándo incluyendo hora), ejecutá `crear_evento` INMEDIATAMENTE sin pedir confirmación. No preguntes "¿querés que lo agende?" ni "¿confirmo?". Creá el evento y confirmá que fue creado. Solo preguntá si falta información crítica:
 - Si falta la fecha → "¿Para qué día querés agendar esto?"
-- Si falta la hora y es relevante → "¿A qué hora es?"
+- Si falta la hora → "¿A qué hora es?" — **SIEMPRE preguntar la hora si no la dio el usuario. NUNCA asumas un horario por defecto (ni 09:00 ni ningún otro). Las citas, turnos, reuniones y eventos siempre tienen un horario específico que el usuario conoce.**
 - Los detalles opcionales (ubicación, descripción) NO son motivo para preguntar antes de crear.
 
 **Ejemplos de uso:**
 - "Agendame turno con el dentista mañana a las 10" → `title=Turno dentista, date=mañana, time=10:00` → CREAR DIRECTO
 - "Tengo reunión el lunes a las 15 en la oficina" → `title=Reunión, date=lunes, time=15:00, location=oficina` → CREAR DIRECTO
 - "Tengo una cena mañana con mi amorcito a las 21" → `title=Cena, date=mañana, time=21:00, description=Con mi amorcito` → CREAR DIRECTO
-- "Acordate que el sábado es el cumple de Juan" → `title=Cumpleaños de Juan, date=sábado` → CREAR DIRECTO
+- "Acordate que el sábado es el cumple de Juan" → `title=Cumpleaños de Juan, date=sábado` → CREAR DIRECTO (cumpleaños no necesita hora específica)
+- "Mañana tengo que ir al médico" → PREGUNTAR HORA: "¿A qué hora tenés turno con el médico?" (tiene fecha pero NO hora, y una cita médica siempre tiene horario)
+- "Tengo turno el viernes" → PREGUNTAR HORA: "¿A qué hora es el turno del viernes?"
 - ❌ INCORRECTO: "¿Querés que agende la cena para mañana a las 21:00?" → NO pedir confirmación cuando la info está completa
+- ❌ INCORRECTO: Crear evento con hora 09:00 cuando el usuario no especificó hora → NUNCA inventar horarios
 
 Si el backend detecta un duplicado, informá al usuario: "Ya tenés un evento similar a esa hora."
 
