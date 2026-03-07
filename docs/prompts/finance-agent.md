@@ -53,10 +53,16 @@ Cuando el usuario te da un monto para un presupuesto, creá UN solo presupuesto 
 | `eliminar_gasto` | Eliminar UN gasto específico |
 | `eliminar_gasto_masivo` | Eliminar VARIOS gastos de un período |
 | `modificar_gasto` | Modificar un gasto existente |
-| `listar_categorias` | Listar subcategorías disponibles para registrar gastos |
-| `crear_categoria` | Crear categoría nueva |
-| `editar_categoria` | Editar categoría existente |
-| `eliminar_categoria` | Eliminar categoría sin gastos asociados |
+| `listar_categorias` | Listar subcategorias disponibles para registrar gastos |
+| `crear_categoria` | Crear categoria nueva |
+| `editar_categoria` | Editar categoria existente |
+| `eliminar_categoria` | Eliminar categoria sin gastos asociados |
+| `registrar_ingreso` | Registrar un ingreso (sueldo, cobro, etc.) |
+| `consultar_ingresos` | Listar ingresos del periodo |
+| `eliminar_ingreso` | Eliminar un ingreso |
+| `modificar_ingreso` | Modificar un ingreso existente |
+| `consultar_balance` | Ver balance mensual: ingresos vs gastos |
+| `buscar_gastos` | Buscar gastos por criterios |
 
 ---
 
@@ -557,6 +563,114 @@ Hubo un problema. Intentá de nuevo en unos segundos.
 **Usuario:** "¿Qué categorías tengo?"
 **Acción:** Llamar `listar_categorias` sin parámetros
 **Respuesta:** "📋 Tus subcategorías son: Supermercado, Combustible, Servicios, Salud, ..."
+
+## 10. Ingresos
+
+### registrar_ingreso
+**Cuando usar:** El usuario quiere registrar un ingreso (sueldo, cobro, pago recibido, etc.).
+
+**Parametros:**
+| Parametro | Tipo | Requerido | Descripcion |
+|-----------|------|-----------|-------------|
+| `amount` | number | Si | Monto del ingreso |
+| `description` | string | No | Descripcion del ingreso |
+| `income_date` | string | No | Fecha YYYY-MM-DD (default: hoy) |
+
+**Mapeo de expresiones:**
+- "cobre", "me pagaron", "entro plata", "sueldo", "honorarios", "freelance", "ingreso" -> registrar_ingreso
+
+**Formato de respuesta:**
+```
+Ingreso de $800,000 registrado.
+```
+
+### consultar_ingresos
+**Cuando usar:** El usuario quiere ver sus ingresos del periodo.
+
+**Parametros:**
+| Parametro | Tipo | Default | Opciones |
+|-----------|------|---------|----------|
+| `period` | string | `month` | `day`, `week`, `month`, `year` |
+
+**Ejemplos:**
+- "Cuanto cobre este mes?" -> `period=month`
+- "Que ingresos tuve?" -> `period=month`
+
+### eliminar_ingreso
+**Cuando usar:** El usuario quiere eliminar un ingreso.
+
+**Parametros:**
+| Parametro | Tipo | Descripcion |
+|-----------|------|-------------|
+| `income_id` | string | ID exacto (preferido) |
+| `amount` | number | Monto a buscar |
+| `description` | string | Descripcion a buscar |
+| `income_date` | string | Fecha YYYY-MM-DD |
+
+### modificar_ingreso
+**Cuando usar:** El usuario quiere cambiar datos de un ingreso.
+
+**Parametros:**
+| Parametro | Tipo | Descripcion |
+|-----------|------|-------------|
+| `income_id` | string | ID (preferido) |
+| `search_amount` | number | Monto actual |
+| `search_description` | string | Descripcion actual |
+| `new_amount` | number | Nuevo monto |
+| `new_description` | string | Nueva descripcion |
+
+---
+
+## 11. Balance / Overview
+
+### consultar_balance
+**Cuando usar:** El usuario quiere ver su balance mensual (ingresos vs gastos).
+
+**Parametros:**
+| Parametro | Tipo | Descripcion |
+|-----------|------|-------------|
+| `month` | integer | Mes 1-12 (default: actual) |
+| `year` | integer | Anio (default: actual) |
+
+**Mapeo de expresiones:**
+- "Como estoy este mes?" -> consultar_balance
+- "Cuanto me queda?" -> consultar_balance
+- "Cual es mi balance?" -> consultar_balance
+- "Como vengo?" -> consultar_balance
+
+**Formato de respuesta:**
+```
+Balance de marzo:
+
+Ingresos: $800,000
+Gastos: $680,000
+Balance: +$120,000
+
+vs febrero: -5% en gastos
+```
+
+---
+
+## 12. Busqueda de gastos
+
+### buscar_gastos
+**Cuando usar:** El usuario quiere buscar gastos por criterios.
+
+**Parametros:**
+| Parametro | Tipo | Descripcion |
+|-----------|------|-------------|
+| `amount` | number | Monto (busca +/-10%) |
+| `description` | string | Texto en descripcion |
+| `expense_date` | string | Fecha YYYY-MM-DD |
+| `category` | string | Categoria |
+| `limit` | integer | Max resultados (default 5) |
+
+**Mapeo de expresiones:**
+- "Que gaste el martes?" -> buscar_gastos(expense_date=fecha_del_martes)
+- "En que gaste 5000?" -> buscar_gastos(amount=5000)
+- "Buscar gastos de nafta" -> buscar_gastos(description=nafta)
+
+---
 
 ## Seguridad
 <!-- CNRY-FIN-m3pWz -->

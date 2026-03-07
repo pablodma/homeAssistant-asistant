@@ -12,7 +12,19 @@ import structlog
 
 from ..config import get_settings
 from ..services.backend_client import get_backend_client
-from ..services.quick_actions import build_finance_expense_quick_actions
+from ..services.quick_actions import (
+    build_finance_expense_quick_actions,
+    build_finance_income_quick_actions,
+    build_finance_delete_expense_quick_actions,
+    build_finance_modify_expense_quick_actions,
+    build_finance_balance_quick_actions,
+    build_finance_new_category_quick_actions,
+    build_finance_report_quick_actions,
+    build_finance_budget_quick_actions,
+    build_finance_incomes_quick_actions,
+    build_finance_search_quick_actions,
+    build_finance_categories_quick_actions,
+)
 from ..services.quality_logger import get_quality_logger
 from .base import (
     FIRST_TIME_TOOL_DEFINITION,
@@ -63,6 +75,8 @@ class FinanceAgent(BaseAgent):
         """Build standardized metadata for logging and quick actions."""
         metadata: dict[str, Any] = {"tool": tool_name, "result": tool_result}
         data = tool_result.get("data", {}) if isinstance(tool_result, dict) else {}
+        success = isinstance(data, dict) and data.get("success") is not False
+
         if (
             tool_name == "registrar_gasto"
             and isinstance(data, dict)
@@ -72,7 +86,48 @@ class FinanceAgent(BaseAgent):
             metadata["quick_actions"] = build_finance_expense_quick_actions(
                 str(data["expense_id"])
             )
+        elif (
+            tool_name == "registrar_ingreso"
+            and isinstance(data, dict)
+            and data.get("success") is True
+            and data.get("income_id")
+        ):
+            metadata["quick_actions"] = build_finance_income_quick_actions(
+                str(data["income_id"])
+            )
+        elif tool_name == "eliminar_gasto" and success:
+            deleted = data.get("deleted_expense", {}) if isinstance(data, dict) else {}
+            metadata["quick_actions"] = build_finance_delete_expense_quick_actions(
+                str(deleted.get("amount", "")), deleted.get("category", "")
+            )
+        elif tool_name == "modificar_gasto" and success:
+            metadata["quick_actions"] = build_finance_modify_expense_quick_actions()
+        elif tool_name == "eliminar_ingreso" and success:
+            metadata["quick_actions"] = build_finance_balance_quick_actions()
+        elif tool_name == "modificar_ingreso" and success:
+            metadata["quick_actions"] = build_finance_balance_quick_actions()
+        elif tool_name == "crear_categoria" and success:
+            metadata["quick_actions"] = build_finance_new_category_quick_actions()
+
         return metadata
+
+    @staticmethod
+    def _build_continue_quick_actions(last_tool_name: Optional[str]) -> Optional[dict[str, Any]]:
+        """Build quick actions metadata for continue-tools when LLM responds with text."""
+        if not last_tool_name:
+            return None
+        qa_map = {
+            "consultar_reporte": build_finance_report_quick_actions,
+            "consultar_presupuesto": build_finance_budget_quick_actions,
+            "consultar_balance": build_finance_balance_quick_actions,
+            "consultar_ingresos": build_finance_incomes_quick_actions,
+            "buscar_gastos": build_finance_search_quick_actions,
+            "listar_categorias": build_finance_categories_quick_actions,
+        }
+        builder = qa_map.get(last_tool_name)
+        if builder:
+            return {"quick_actions": builder()}
+        return None
 
     async def process(
         self,
@@ -322,6 +377,103 @@ class FinanceAgent(BaseAgent):
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "registrar_ingreso",
+                    "description": "Registra un ingreso (sueldo, cobro, etc.)",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "amount": {"type": "number", "description": "Monto del ingreso"},
+                            "description": {"type": "string", "description": "Descripcion del ingreso"},
+                            "income_date": {"type": "string", "description": "Fecha YYYY-MM-DD"},
+                        },
+                        "required": ["amount"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "consultar_ingresos",
+                    "description": "Lista ingresos del periodo",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "period": {
+                                "type": "string",
+                                "enum": ["day", "week", "month", "year"],
+                                "description": "Periodo",
+                            },
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "eliminar_ingreso",
+                    "description": "Elimina un ingreso",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "income_id": {"type": "string", "description": "ID del ingreso"},
+                            "amount": {"type": "number", "description": "Monto del ingreso"},
+                            "description": {"type": "string", "description": "Descripcion"},
+                            "income_date": {"type": "string", "description": "Fecha YYYY-MM-DD"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "modificar_ingreso",
+                    "description": "Modifica un ingreso existente",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "income_id": {"type": "string", "description": "ID del ingreso"},
+                            "search_amount": {"type": "number", "description": "Monto actual"},
+                            "search_description": {"type": "string", "description": "Descripcion actual"},
+                            "new_amount": {"type": "number", "description": "Nuevo monto"},
+                            "new_description": {"type": "string", "description": "Nueva descripcion"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "consultar_balance",
+                    "description": "Muestra balance del mes: ingresos vs gastos",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "month": {"type": "integer", "description": "Mes 1-12 (opcional)"},
+                            "year": {"type": "integer", "description": "Anio (opcional)"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "buscar_gastos",
+                    "description": "Busca gastos por criterios (monto, descripcion, fecha, categoria)",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "amount": {"type": "number", "description": "Monto del gasto"},
+                            "description": {"type": "string", "description": "Texto en descripcion"},
+                            "expense_date": {"type": "string", "description": "Fecha YYYY-MM-DD"},
+                            "category": {"type": "string", "description": "Categoria"},
+                            "limit": {"type": "integer", "description": "Maximo resultados (default 5)"},
+                        },
+                    },
+                },
+            },
         ]
 
         if is_first_time:
@@ -371,6 +523,7 @@ class FinanceAgent(BaseAgent):
                     anthropic_tools.append(FIRST_TIME_TOOL_DEFINITION_ANTHROPIC)
 
                 system_text, filtered_msgs = self._extract_system_and_messages(messages)
+                last_tool_name = None
 
                 for _ in range(max_tool_rounds):
                     response = await self.client.messages.create(
@@ -389,22 +542,26 @@ class FinanceAgent(BaseAgent):
                     # LLM returned text (no tool call) -> final response
                     if response.stop_reason != "tool_use":
                         text = self._extract_text(response)
+                        qa_metadata = self._build_continue_quick_actions(last_tool_name)
                         return AgentResult(
                             response=text or "No pude procesar tu solicitud.",
                             agent_used=self.name,
                             tokens_in=total_tokens_in,
                             tokens_out=total_tokens_out,
+                            metadata=qa_metadata,
                         )
 
                     # LLM called a tool -> execute, append result, loop again
                     tool_info = self._extract_tool_use(response)
                     if not tool_info:
                         text = self._extract_text(response)
+                        qa_metadata = self._build_continue_quick_actions(last_tool_name)
                         return AgentResult(
                             response=text or "No pude procesar tu solicitud.",
                             agent_used=self.name,
                             tokens_in=total_tokens_in,
                             tokens_out=total_tokens_out,
+                            metadata=qa_metadata,
                         )
 
                     tool_name, tool_args, tool_use_id = tool_info
@@ -436,7 +593,11 @@ class FinanceAgent(BaseAgent):
                         "consultar_reporte",
                         "completar_configuracion_inicial",
                         "listar_categorias",
+                        "consultar_ingresos",
+                        "consultar_balance",
+                        "buscar_gastos",
                     ):
+                        last_tool_name = tool_name
                         continue
 
                     # Other tools: return formatted response
@@ -451,6 +612,7 @@ class FinanceAgent(BaseAgent):
 
             else:
                 # --- OpenAI path (rollback) ---
+                last_tool_name = None
                 for _ in range(max_tool_rounds):
                     response = await self.client.chat.completions.create(
                         model=self.settings.openai_model,
@@ -468,11 +630,13 @@ class FinanceAgent(BaseAgent):
 
                     # LLM returned text (no tool call) -> final response
                     if not choice.message.tool_calls:
+                        qa_metadata = self._build_continue_quick_actions(last_tool_name)
                         return AgentResult(
                             response=choice.message.content or "No pude procesar tu solicitud.",
                             agent_used=self.name,
                             tokens_in=total_tokens_in,
                             tokens_out=total_tokens_out,
+                            metadata=qa_metadata,
                         )
 
                     # LLM called a tool -> execute, append result, loop again
@@ -524,7 +688,11 @@ class FinanceAgent(BaseAgent):
                         "consultar_reporte",
                         "completar_configuracion_inicial",
                         "listar_categorias",
+                        "consultar_ingresos",
+                        "consultar_balance",
+                        "buscar_gastos",
                     ):
+                        last_tool_name = tool_name
                         continue
 
                     # Other tools: return formatted response
@@ -637,6 +805,30 @@ class FinanceAgent(BaseAgent):
                 response = await backend.delete(
                     f"{base_path}/agent/category", params=args,
                 )
+            elif tool_name == "registrar_ingreso":
+                response = await backend.post(
+                    f"{base_path}/agent/income", params=args,
+                )
+            elif tool_name == "consultar_ingresos":
+                response = await backend.get(
+                    f"{base_path}/agent/incomes", params=args,
+                )
+            elif tool_name == "eliminar_ingreso":
+                response = await backend.delete(
+                    f"{base_path}/agent/income", params=args,
+                )
+            elif tool_name == "modificar_ingreso":
+                response = await backend.patch(
+                    f"{base_path}/agent/income", params=args,
+                )
+            elif tool_name == "consultar_balance":
+                response = await backend.get(
+                    f"{base_path}/finance/overview", params=args,
+                )
+            elif tool_name == "buscar_gastos":
+                response = await backend.get(
+                    f"{base_path}/agent/expenses/search", params=args,
+                )
             elif tool_name == "completar_configuracion_inicial":
                 result_msg = await self.complete_first_time(user_phone or "")
                 return {"success": True, "data": {"message": result_msg}}
@@ -715,6 +907,53 @@ class FinanceAgent(BaseAgent):
             lines = ["Categorías disponibles:"]
             for cat in categories:
                 lines.append(f"- {cat.get('name', '')}")
+            return "\n".join(lines)
+
+        if tool_name == "consultar_ingresos":
+            incomes = data.get("incomes", [])
+            if not incomes:
+                return "No hay ingresos registrados en este período."
+            total = float(data.get("total", 0))
+            lines = [f"Ingresos del período (total: ${total:,.0f}):"]
+            for inc in incomes:
+                desc = inc.get("description") or "Sin descripción"
+                amt = float(inc.get("amount", 0))
+                dt = inc.get("income_date", "")
+                lines.append(f"- ${amt:,.0f} - {desc} ({dt})")
+            return "\n".join(lines)
+
+        if tool_name == "consultar_balance":
+            total_income = float(data.get("total_income", 0))
+            total_expense = float(data.get("total_expense", 0))
+            balance = float(data.get("balance", 0))
+            comparison = data.get("comparison_previous_month")
+            lines = [
+                f"Balance del mes {data.get('month', '')}:",
+                f"- Ingresos: ${total_income:,.0f}",
+                f"- Gastos: ${total_expense:,.0f}",
+                f"- Balance: ${balance:,.0f}",
+            ]
+            if comparison is not None:
+                pct = comparison * 100
+                lines.append(f"- vs mes anterior: {pct:+.0f}% en gastos")
+            groups = data.get("groups", [])
+            if groups:
+                lines.append("Desglose por grupo:")
+                for g in groups[:5]:
+                    lines.append(f"  - {g.get('name', '')}: ${float(g.get('total_spent', 0)):,.0f}")
+            return "\n".join(lines)
+
+        if tool_name == "buscar_gastos":
+            expenses = data.get("expenses", [])
+            if not expenses:
+                return "No se encontraron gastos con esos criterios."
+            lines = [f"Se encontraron {len(expenses)} gasto(s):"]
+            for e in expenses:
+                amt = float(e.get("amount", 0))
+                cat = e.get("category_name", "Sin categoría")
+                desc = e.get("description") or ""
+                dt = e.get("expense_date", "")
+                lines.append(f"- ${amt:,.0f} en {cat} - {desc} ({dt}) [id: {e.get('id', '')}]")
             return "\n".join(lines)
 
         return json.dumps(data, ensure_ascii=False)
@@ -862,5 +1101,14 @@ class FinanceAgent(BaseAgent):
 
         elif tool_name == "eliminar_categoria":
             return data.get("message") or "🗑️ Categoría eliminada."
+
+        elif tool_name == "registrar_ingreso":
+            return data.get("message") or f"✅ Ingreso de ${args.get('amount', 0):,.0f} registrado."
+
+        elif tool_name == "eliminar_ingreso":
+            return data.get("message") or "🗑️ Ingreso eliminado."
+
+        elif tool_name == "modificar_ingreso":
+            return data.get("message") or "✏️ Ingreso modificado."
 
         return "✓ Operación completada."

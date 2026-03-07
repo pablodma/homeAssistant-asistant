@@ -295,6 +295,48 @@ async def process_message(message: IncomingMessage) -> None:
                     message = message.model_copy(
                         update={"text": "Mostrame el resumen de gastos del mes."}
                     )
+                elif parsed_action.kind == "income_delete" and parsed_action.income_id:
+                    message = message.model_copy(
+                        update={"text": f"Eliminar ingreso con income_id={parsed_action.income_id}"}
+                    )
+                elif parsed_action.kind == "income_edit" and parsed_action.income_id:
+                    message = message.model_copy(
+                        update={"text": f"Quiero editar el ingreso con income_id={parsed_action.income_id}"}
+                    )
+                elif parsed_action.kind == "balance":
+                    clear_pending_expense_edit(message.phone)
+                    message = message.model_copy(
+                        update={"text": "Mostrame el balance del mes."}
+                    )
+                elif parsed_action.kind == "add_expense":
+                    clear_pending_expense_edit(message.phone)
+                    message = message.model_copy(
+                        update={"text": "Quiero registrar un gasto"}
+                    )
+                elif parsed_action.kind == "add_income":
+                    clear_pending_expense_edit(message.phone)
+                    message = message.model_copy(
+                        update={"text": "Quiero registrar un ingreso"}
+                    )
+                elif parsed_action.kind == "budget_status":
+                    clear_pending_expense_edit(message.phone)
+                    message = message.model_copy(
+                        update={"text": "Mostrame el estado del presupuesto"}
+                    )
+                elif parsed_action.kind == "add_category":
+                    clear_pending_expense_edit(message.phone)
+                    message = message.model_copy(
+                        update={"text": "Quiero crear una categoria nueva"}
+                    )
+                elif parsed_action.kind == "undo_expense":
+                    # The action_id format is fin_undo_expense:{amount}:{category}
+                    parts = (message.interactive_id or "").split(":", 2)
+                    amount = parts[1] if len(parts) > 1 else ""
+                    category = parts[2] if len(parts) > 2 else ""
+                    clear_pending_expense_edit(message.phone)
+                    message = message.model_copy(
+                        update={"text": f"Registrar gasto de {amount} en {category}"}
+                    )
 
         # If there is pending edit context, append it to next user message.
         pending_edit = get_pending_expense_edit(message.phone)
