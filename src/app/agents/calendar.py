@@ -5,11 +5,16 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 
 import structlog
-from openai import AsyncOpenAI
 
 from ..config import get_settings
 from ..services.backend_client import get_backend_client
-from .base import FIRST_TIME_TOOL_DEFINITION, AgentResult, BaseAgent
+from .base import (
+    FIRST_TIME_TOOL_DEFINITION,
+    FIRST_TIME_TOOL_DEFINITION_ANTHROPIC,
+    AgentResult,
+    BaseAgent,
+    openai_tool_to_anthropic,
+)
 
 logger = structlog.get_logger()
 
@@ -22,7 +27,7 @@ class CalendarAgent(BaseAgent):
     def __init__(self):
         """Initialize the calendar agent."""
         super().__init__()
-        self.client = AsyncOpenAI(api_key=self.settings.openai_api_key)
+        self._init_llm_client("calendar_model_provider")
 
     async def process(
         self,
@@ -237,102 +242,191 @@ class CalendarAgent(BaseAgent):
             tools.append(FIRST_TIME_TOOL_DEFINITION)
 
         try:
-            response = await self.client.chat.completions.create(
-                model=self.settings.openai_model,
-                messages=messages,
-                tools=tools,
-                tool_choice="auto",
-                temperature=0.4,
-                max_completion_tokens=1000,
-            )
+            if self.provider == "anthropic":
+                # --- Anthropic path ---
+                anthropic_tools = [openai_tool_to_anthropic(t) for t in tools if t.get("type") == "function"]
+                if is_first_time:
+                    # Replace the OpenAI first-time tool with Anthropic version
+                    anthropic_tools = [t for t in anthropic_tools if t["name"] != "completar_configuracion_inicial"]
+                    anthropic_tools.append(FIRST_TIME_TOOL_DEFINITION_ANTHROPIC)
 
-            choice = response.choices[0]
-            tokens_in = response.usage.prompt_tokens if response.usage else None
-            tokens_out = response.usage.completion_tokens if response.usage else None
+                system_text, filtered_msgs = self._extract_system_and_messages(messages)
 
-            # Check if tool was called
-            if choice.message.tool_calls:
-                tool_call = choice.message.tool_calls[0]
-                tool_name = tool_call.function.name
-                tool_args = json.loads(tool_call.function.arguments)
+                response = await self.client.messages.create(
+                    model=self.settings.anthropic_subagent_model,
+                    system=system_text,
+                    messages=filtered_msgs,
+                    tools=anthropic_tools,
+                    tool_choice={"type": "auto"},
+                    max_tokens=1000,
+                )
 
-                logger.info(f"Calendar tool call: {tool_name}", args=tool_args)
+                tokens_in, tokens_out = self._anthropic_tokens(response)
 
-                # First-time completion: execute and let LLM generate follow-up
-                if tool_name == "completar_configuracion_inicial":
-                    result_msg = await self.complete_first_time(phone)
-                    messages.append({
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [{"id": tool_call.id, "type": "function", "function": {"name": tool_name, "arguments": tool_call.function.arguments}}],
-                    })
-                    messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": result_msg})
-                    follow_up = await self.client.chat.completions.create(
-                        model=self.settings.openai_model,
-                        messages=messages,
-                        temperature=0.4,
-                        max_completion_tokens=500,
+                tool_info = self._extract_tool_use(response)
+                if tool_info:
+                    tool_name, tool_args, tool_use_id = tool_info
+                    logger.info(f"Calendar tool call: {tool_name}", args=tool_args)
+
+                    # Flow B: First-time completion
+                    if tool_name == "completar_configuracion_inicial":
+                        result_msg = await self.complete_first_time(phone)
+                        filtered_msgs.append({"role": "assistant", "content": response.content})
+                        filtered_msgs.append(self._build_tool_result_msg(tool_use_id, result_msg))
+                        follow_up = await self.client.messages.create(
+                            model=self.settings.anthropic_subagent_model,
+                            system=system_text,
+                            messages=filtered_msgs,
+                            max_tokens=500,
+                        )
+                        return AgentResult(
+                            response=self._extract_text(follow_up) or "¡Configuración completada!",
+                            agent_used=self.name,
+                            tokens_in=tokens_in,
+                            tokens_out=tokens_out,
+                        )
+
+                    # Execute the tool
+                    tool_result = await self._execute_tool(tool_name, tool_args, tenant_id, phone)
+
+                    # Flow C: First-time guided onboarding
+                    if is_first_time:
+                        tool_result_str = json.dumps(tool_result, ensure_ascii=False, default=str)
+                        filtered_msgs.append({"role": "assistant", "content": response.content})
+                        filtered_msgs.append(self._build_tool_result_msg(tool_use_id, tool_result_str))
+                        follow_up = await self.client.messages.create(
+                            model=self.settings.anthropic_subagent_model,
+                            system=system_text,
+                            messages=filtered_msgs,
+                            max_tokens=1000,
+                        )
+                        f_in, f_out = self._anthropic_tokens(follow_up)
+                        return AgentResult(
+                            response=self._extract_text(follow_up) or "¡Bienvenido al módulo de agenda!",
+                            agent_used=self.name,
+                            tokens_in=(tokens_in or 0) + f_in,
+                            tokens_out=(tokens_out or 0) + f_out,
+                            metadata={"tool": tool_name, "result": tool_result, "first_time_flow": True},
+                        )
+
+                    # Flow A: Normal tool call
+                    response_text = await self._generate_response(
+                        tool_name, tool_args, tool_result, message,
+                        tenant_id=tenant_id, phone=phone,
                     )
                     return AgentResult(
-                        response=follow_up.choices[0].message.content or "¡Configuración completada!",
+                        response=response_text,
                         agent_used=self.name,
                         tokens_in=tokens_in,
                         tokens_out=tokens_out,
+                        metadata={"tool": tool_name, "result": tool_result},
                     )
 
-                # Execute the tool
-                tool_result = await self._execute_tool(tool_name, tool_args, tenant_id, phone)
-
-                # First-time flow: feed tool result back to LLM for guided onboarding
-                # (same pattern as completar_configuracion_inicial above)
-                if is_first_time:
-                    messages.append({
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [{"id": tool_call.id, "type": "function", "function": {"name": tool_name, "arguments": tool_call.function.arguments}}],
-                    })
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": json.dumps(tool_result, ensure_ascii=False, default=str),
-                    })
-                    follow_up = await self.client.chat.completions.create(
-                        model=self.settings.openai_model,
-                        messages=messages,
-                        temperature=0.4,
-                        max_completion_tokens=1000,
-                    )
-                    follow_tokens_in = follow_up.usage.prompt_tokens if follow_up.usage else 0
-                    follow_tokens_out = follow_up.usage.completion_tokens if follow_up.usage else 0
-                    return AgentResult(
-                        response=follow_up.choices[0].message.content or "¡Bienvenido al módulo de agenda!",
-                        agent_used=self.name,
-                        tokens_in=(tokens_in or 0) + follow_tokens_in,
-                        tokens_out=(tokens_out or 0) + follow_tokens_out,
-                        metadata={"tool": tool_name, "result": tool_result, "first_time_flow": True},
-                    )
-
-                # Generate response based on tool result
-                response_text = await self._generate_response(
-                    tool_name, tool_args, tool_result, message,
-                    tenant_id=tenant_id, phone=phone,
-                )
-
+                # Direct text response (no tool call)
                 return AgentResult(
-                    response=response_text,
+                    response=self._extract_text(response) or "No pude procesar tu solicitud.",
                     agent_used=self.name,
                     tokens_in=tokens_in,
                     tokens_out=tokens_out,
-                    metadata={"tool": tool_name, "result": tool_result},
                 )
 
-            # Direct response
-            return AgentResult(
-                response=choice.message.content or "No pude procesar tu solicitud.",
-                agent_used=self.name,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
-            )
+            else:
+                # --- OpenAI path (rollback) ---
+                response = await self.client.chat.completions.create(
+                    model=self.settings.openai_model,
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",
+                    temperature=0.4,
+                    max_completion_tokens=1000,
+                )
+
+                choice = response.choices[0]
+                tokens_in = response.usage.prompt_tokens if response.usage else None
+                tokens_out = response.usage.completion_tokens if response.usage else None
+
+                # Check if tool was called
+                if choice.message.tool_calls:
+                    tool_call = choice.message.tool_calls[0]
+                    tool_name = tool_call.function.name
+                    tool_args = json.loads(tool_call.function.arguments)
+
+                    logger.info(f"Calendar tool call: {tool_name}", args=tool_args)
+
+                    # First-time completion: execute and let LLM generate follow-up
+                    if tool_name == "completar_configuracion_inicial":
+                        result_msg = await self.complete_first_time(phone)
+                        messages.append({
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [{"id": tool_call.id, "type": "function", "function": {"name": tool_name, "arguments": tool_call.function.arguments}}],
+                        })
+                        messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": result_msg})
+                        follow_up = await self.client.chat.completions.create(
+                            model=self.settings.openai_model,
+                            messages=messages,
+                            temperature=0.4,
+                            max_completion_tokens=500,
+                        )
+                        return AgentResult(
+                            response=follow_up.choices[0].message.content or "¡Configuración completada!",
+                            agent_used=self.name,
+                            tokens_in=tokens_in,
+                            tokens_out=tokens_out,
+                        )
+
+                    # Execute the tool
+                    tool_result = await self._execute_tool(tool_name, tool_args, tenant_id, phone)
+
+                    # First-time flow: feed tool result back to LLM for guided onboarding
+                    if is_first_time:
+                        messages.append({
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [{"id": tool_call.id, "type": "function", "function": {"name": tool_name, "arguments": tool_call.function.arguments}}],
+                        })
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": json.dumps(tool_result, ensure_ascii=False, default=str),
+                        })
+                        follow_up = await self.client.chat.completions.create(
+                            model=self.settings.openai_model,
+                            messages=messages,
+                            temperature=0.4,
+                            max_completion_tokens=1000,
+                        )
+                        follow_tokens_in = follow_up.usage.prompt_tokens if follow_up.usage else 0
+                        follow_tokens_out = follow_up.usage.completion_tokens if follow_up.usage else 0
+                        return AgentResult(
+                            response=follow_up.choices[0].message.content or "¡Bienvenido al módulo de agenda!",
+                            agent_used=self.name,
+                            tokens_in=(tokens_in or 0) + follow_tokens_in,
+                            tokens_out=(tokens_out or 0) + follow_tokens_out,
+                            metadata={"tool": tool_name, "result": tool_result, "first_time_flow": True},
+                        )
+
+                    # Generate response based on tool result
+                    response_text = await self._generate_response(
+                        tool_name, tool_args, tool_result, message,
+                        tenant_id=tenant_id, phone=phone,
+                    )
+
+                    return AgentResult(
+                        response=response_text,
+                        agent_used=self.name,
+                        tokens_in=tokens_in,
+                        tokens_out=tokens_out,
+                        metadata={"tool": tool_name, "result": tool_result},
+                    )
+
+                # Direct response
+                return AgentResult(
+                    response=choice.message.content or "No pude procesar tu solicitud.",
+                    agent_used=self.name,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                )
 
         except Exception as e:
             logger.error("Calendar agent error", error=str(e))

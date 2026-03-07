@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import structlog
+from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 
 from ..config import get_settings
 from ..config import get_settings as _get_settings  # alias used by _init_langfuse
@@ -46,6 +48,25 @@ FIRST_TIME_TOOL_DEFINITION: dict[str, Any] = {
         "parameters": {"type": "object", "properties": {}, "required": []},
     },
 }
+
+FIRST_TIME_TOOL_DEFINITION_ANTHROPIC: dict[str, Any] = {
+    "name": "completar_configuracion_inicial",
+    "description": (
+        "Marca la configuración inicial del agente como completada. "
+        "Usar cuando el usuario terminó el setup de primera vez."
+    ),
+    "input_schema": {"type": "object", "properties": {}, "required": []},
+}
+
+
+def openai_tool_to_anthropic(tool: dict[str, Any]) -> dict[str, Any]:
+    """Convert an OpenAI-format tool definition to Anthropic format."""
+    func = tool["function"]
+    return {
+        "name": func["name"],
+        "description": func["description"],
+        "input_schema": func["parameters"],
+    }
 
 
 @dataclass
@@ -171,6 +192,83 @@ class BaseAgent(ABC):
             The agent's response.
         """
         pass
+
+    def _init_llm_client(self, provider_setting: str) -> None:
+        """Initialize LLM client based on provider setting.
+
+        Sets self.provider ("openai" | "anthropic") and self.client.
+
+        Args:
+            provider_setting: Name of the settings attribute for provider.
+        """
+        self.provider: str = getattr(self.settings, provider_setting, "anthropic")
+        if self.provider == "anthropic":
+            self.client = AsyncAnthropic(api_key=self.settings.anthropic_api_key)
+        else:
+            self.client = AsyncOpenAI(api_key=self.settings.openai_api_key)
+
+    # --- Anthropic helpers ---
+
+    @staticmethod
+    def _extract_system_and_messages(
+        messages: list[dict[str, Any]],
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Separate system messages from user/assistant messages.
+
+        Anthropic requires system as a top-level param, not in messages.
+
+        Returns:
+            (system_text, filtered_messages)
+        """
+        system_parts: list[str] = []
+        filtered: list[dict[str, Any]] = []
+        for msg in messages:
+            if msg["role"] == "system":
+                system_parts.append(msg["content"])
+            else:
+                filtered.append(msg)
+        return "\n\n".join(system_parts), filtered
+
+    @staticmethod
+    def _extract_tool_use(response: Any) -> Optional[tuple[str, dict, str]]:
+        """Extract tool use from Anthropic response.
+
+        Returns:
+            (tool_name, tool_args, tool_use_id) or None
+        """
+        for block in response.content:
+            if block.type == "tool_use":
+                return block.name, block.input, block.id
+        return None
+
+    @staticmethod
+    def _extract_text(response: Any) -> str:
+        """Extract text content from Anthropic response."""
+        parts = []
+        for block in response.content:
+            if block.type == "text":
+                parts.append(block.text)
+        return "\n".join(parts)
+
+    @staticmethod
+    def _build_tool_result_msg(tool_use_id: str, content: str) -> dict[str, Any]:
+        """Build Anthropic tool_result message."""
+        return {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": content,
+                }
+            ],
+        }
+
+    @staticmethod
+    def _anthropic_tokens(response: Any) -> tuple[int, int]:
+        """Extract token counts from Anthropic response."""
+        usage = response.usage
+        return usage.input_tokens, usage.output_tokens
 
     def _format_history(self, history: list) -> list[dict[str, str]]:
         """Format conversation history for LLM.

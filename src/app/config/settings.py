@@ -37,8 +37,16 @@ class Settings(BaseSettings):
     orchestrator_finalizer_model: str = "gpt-4.1-nano"
     whisper_model: str = "whisper-1"
 
-    # Anthropic (used by QA and Prompt Improver agents)
+    # Anthropic (used by QA, Prompt Improver, and sub-agents)
     anthropic_api_key: str = ""
+    anthropic_subagent_model: str = "claude-haiku-4-5-20251001"
+
+    # Per-agent model provider for gradual rollout / rollback ("openai" | "anthropic")
+    finance_model_provider: str = "anthropic"
+    calendar_model_provider: str = "anthropic"
+    shopping_model_provider: str = "anthropic"
+    vehicle_model_provider: str = "anthropic"
+    subscription_model_provider: str = "anthropic"
     qa_model: str = "claude-sonnet-4-20250514"
     qa_review_model: str = "claude-opus-4-6"  # deprecated: use the split models below
     qa_review_analysis_model: str = "claude-sonnet-4-20250514"  # Step 1: issue analysis (cheap)

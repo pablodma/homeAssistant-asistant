@@ -9,13 +9,18 @@ import re
 from typing import Any, Optional
 
 import structlog
-from openai import AsyncOpenAI
 
 from ..config import get_settings
 from ..services.backend_client import get_backend_client
 from ..services.quick_actions import build_finance_expense_quick_actions
 from ..services.quality_logger import get_quality_logger
-from .base import FIRST_TIME_TOOL_DEFINITION, AgentResult, BaseAgent
+from .base import (
+    FIRST_TIME_TOOL_DEFINITION,
+    FIRST_TIME_TOOL_DEFINITION_ANTHROPIC,
+    AgentResult,
+    BaseAgent,
+    openai_tool_to_anthropic,
+)
 
 logger = structlog.get_logger()
 
@@ -35,7 +40,7 @@ class FinanceAgent(BaseAgent):
     def __init__(self):
         """Initialize the finance agent."""
         super().__init__()
-        self.client = AsyncOpenAI(api_key=self.settings.openai_api_key)
+        self._init_llm_client("finance_model_provider")
 
     @staticmethod
     def _extract_expense_id(text: str) -> Optional[str]:
@@ -359,96 +364,178 @@ class FinanceAgent(BaseAgent):
             total_tokens_out = 0
             max_tool_rounds = 5
 
-            for _ in range(max_tool_rounds):
-                response = await self.client.chat.completions.create(
-                    model=self.settings.openai_model,
-                    messages=messages,
-                    tools=tools,
-                    tool_choice="auto",
-                    temperature=0.4,
-                    max_completion_tokens=1000,
-                )
+            if self.provider == "anthropic":
+                # --- Anthropic path ---
+                anthropic_tools = [openai_tool_to_anthropic(t) for t in tools]
+                if is_first_time:
+                    anthropic_tools.append(FIRST_TIME_TOOL_DEFINITION_ANTHROPIC)
 
-                choice = response.choices[0]
-                if response.usage:
-                    total_tokens_in += response.usage.prompt_tokens
-                    total_tokens_out += response.usage.completion_tokens
+                system_text, filtered_msgs = self._extract_system_and_messages(messages)
 
-                # LLM returned text (no tool call) -> final response
-                if not choice.message.tool_calls:
+                for _ in range(max_tool_rounds):
+                    response = await self.client.messages.create(
+                        model=self.settings.anthropic_subagent_model,
+                        system=system_text,
+                        messages=filtered_msgs,
+                        tools=anthropic_tools,
+                        tool_choice={"type": "auto"},
+                        max_tokens=1000,
+                    )
+
+                    t_in, t_out = self._anthropic_tokens(response)
+                    total_tokens_in += t_in
+                    total_tokens_out += t_out
+
+                    # LLM returned text (no tool call) -> final response
+                    if response.stop_reason != "tool_use":
+                        text = self._extract_text(response)
+                        return AgentResult(
+                            response=text or "No pude procesar tu solicitud.",
+                            agent_used=self.name,
+                            tokens_in=total_tokens_in,
+                            tokens_out=total_tokens_out,
+                        )
+
+                    # LLM called a tool -> execute, append result, loop again
+                    tool_info = self._extract_tool_use(response)
+                    if not tool_info:
+                        text = self._extract_text(response)
+                        return AgentResult(
+                            response=text or "No pude procesar tu solicitud.",
+                            agent_used=self.name,
+                            tokens_in=total_tokens_in,
+                            tokens_out=total_tokens_out,
+                        )
+
+                    tool_name, tool_args, tool_use_id = tool_info
+
+                    logger.info(f"Finance tool call: {tool_name}", args=tool_args)
+
+                    tool_result = await self._execute_tool(
+                        tool_name, tool_args, tenant_id,
+                        user_phone=phone,
+                        message_in=message,
+                    )
+
+                    tool_result_for_llm = self._format_tool_result_for_llm(
+                        tool_name, tool_args, tool_result
+                    )
+
+                    # Append assistant message with raw content blocks
+                    filtered_msgs.append(
+                        {"role": "assistant", "content": response.content}
+                    )
+                    # Append tool result
+                    filtered_msgs.append(
+                        self._build_tool_result_msg(tool_use_id, tool_result_for_llm)
+                    )
+
+                    # These tools need LLM follow-up: continue loop so it can reason.
+                    if tool_name in (
+                        "consultar_presupuesto",
+                        "consultar_reporte",
+                        "completar_configuracion_inicial",
+                        "listar_categorias",
+                    ):
+                        continue
+
+                    # Other tools: return formatted response
+                    response_text = self._format_response(tool_name, tool_args, tool_result)
                     return AgentResult(
-                        response=choice.message.content or "No pude procesar tu solicitud.",
+                        response=response_text,
                         agent_used=self.name,
                         tokens_in=total_tokens_in,
                         tokens_out=total_tokens_out,
+                        metadata=self._build_metadata(tool_name, tool_result),
                     )
 
-                # LLM called a tool -> execute, append result, loop again
-                tool_call = choice.message.tool_calls[0]
-                tool_name = tool_call.function.name
-                tool_args = json.loads(tool_call.function.arguments)
+            else:
+                # --- OpenAI path (rollback) ---
+                for _ in range(max_tool_rounds):
+                    response = await self.client.chat.completions.create(
+                        model=self.settings.openai_model,
+                        messages=messages,
+                        tools=tools,
+                        tool_choice="auto",
+                        temperature=0.4,
+                        max_completion_tokens=1000,
+                    )
 
-                logger.info(f"Finance tool call: {tool_name}", args=tool_args)
+                    choice = response.choices[0]
+                    if response.usage:
+                        total_tokens_in += response.usage.prompt_tokens
+                        total_tokens_out += response.usage.completion_tokens
 
-                tool_result = await self._execute_tool(
-                    tool_name, tool_args, tenant_id,
-                    user_phone=phone,
-                    message_in=message,
-                )
+                    # LLM returned text (no tool call) -> final response
+                    if not choice.message.tool_calls:
+                        return AgentResult(
+                            response=choice.message.content or "No pude procesar tu solicitud.",
+                            agent_used=self.name,
+                            tokens_in=total_tokens_in,
+                            tokens_out=total_tokens_out,
+                        )
 
-                # Append assistant message with tool_calls
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": choice.message.content or None,
-                        "tool_calls": [
-                            {
-                                "id": tool_call.id,
-                                "type": "function",
-                                "function": {
-                                    "name": tool_name,
-                                    "arguments": tool_call.function.arguments,
-                                },
-                            }
-                        ],
-                    }
-                )
+                    # LLM called a tool -> execute, append result, loop again
+                    tool_call = choice.message.tool_calls[0]
+                    tool_name = tool_call.function.name
+                    tool_args = json.loads(tool_call.function.arguments)
 
-                # Append tool result for LLM to reason about
-                tool_result_for_llm = self._format_tool_result_for_llm(
-                    tool_name, tool_args, tool_result
-                )
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": tool_result_for_llm,
-                    }
-                )
+                    logger.info(f"Finance tool call: {tool_name}", args=tool_args)
 
-                # These tools need LLM follow-up: continue loop so it can reason.
-                # `listar_categorias` must continue too, so the model can map the
-                # user's concept to an existing subcategory and then call
-                # `registrar_gasto` in the same turn when possible.
-                # `consultar_reporte` must continue so the LLM can craft a natural
-                # response to the user's question instead of a generic formatted report.
-                if tool_name in (
-                    "consultar_presupuesto",
-                    "consultar_reporte",
-                    "completar_configuracion_inicial",
-                    "listar_categorias",
-                ):
-                    continue
+                    tool_result = await self._execute_tool(
+                        tool_name, tool_args, tenant_id,
+                        user_phone=phone,
+                        message_in=message,
+                    )
 
-                # Other tools: return formatted response
-                response_text = self._format_response(tool_name, tool_args, tool_result)
-                return AgentResult(
-                    response=response_text,
-                    agent_used=self.name,
-                    tokens_in=total_tokens_in,
-                    tokens_out=total_tokens_out,
-                    metadata=self._build_metadata(tool_name, tool_result),
-                )
+                    # Append assistant message with tool_calls
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": choice.message.content or None,
+                            "tool_calls": [
+                                {
+                                    "id": tool_call.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tool_name,
+                                        "arguments": tool_call.function.arguments,
+                                    },
+                                }
+                            ],
+                        }
+                    )
+
+                    # Append tool result for LLM to reason about
+                    tool_result_for_llm = self._format_tool_result_for_llm(
+                        tool_name, tool_args, tool_result
+                    )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": tool_result_for_llm,
+                        }
+                    )
+
+                    # These tools need LLM follow-up: continue loop so it can reason.
+                    if tool_name in (
+                        "consultar_presupuesto",
+                        "consultar_reporte",
+                        "completar_configuracion_inicial",
+                        "listar_categorias",
+                    ):
+                        continue
+
+                    # Other tools: return formatted response
+                    response_text = self._format_response(tool_name, tool_args, tool_result)
+                    return AgentResult(
+                        response=response_text,
+                        agent_used=self.name,
+                        tokens_in=total_tokens_in,
+                        tokens_out=total_tokens_out,
+                        metadata=self._build_metadata(tool_name, tool_result),
+                    )
 
             # Max rounds reached
             return AgentResult(

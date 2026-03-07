@@ -11,12 +11,10 @@ import json
 from typing import Any, Optional
 
 import structlog
-from openai import AsyncOpenAI
-
 from ..config import get_settings
 from ..services.backend_client import get_backend_client
 from ..services.quality_logger import get_quality_logger
-from .base import AgentResult, BaseAgent
+from .base import AgentResult, BaseAgent, openai_tool_to_anthropic
 
 logger = structlog.get_logger()
 
@@ -245,7 +243,7 @@ class SubscriptionAgent(BaseAgent):
     def __init__(self) -> None:
         """Initialize the subscription agent."""
         super().__init__()
-        self.client = AsyncOpenAI(api_key=self.settings.openai_api_key)
+        self._init_llm_client("subscription_model_provider")
 
     async def process(
         self,
@@ -336,75 +334,138 @@ class SubscriptionAgent(BaseAgent):
             total_tokens_out = 0
             max_tool_rounds = 5
 
-            for _ in range(max_tool_rounds):
-                response = await self.client.chat.completions.create(
-                    model=self.settings.openai_model,
-                    messages=messages,
-                    tools=tools,
-                    tool_choice="auto",
-                    temperature=0.4,
-                    max_completion_tokens=1500,
-                )
+            if self.provider == "anthropic":
+                anthropic_tools = [openai_tool_to_anthropic(t) for t in tools]
+                system_text, filtered_msgs = self._extract_system_and_messages(messages)
 
-                choice = response.choices[0]
-                if response.usage:
-                    total_tokens_in += response.usage.prompt_tokens
-                    total_tokens_out += response.usage.completion_tokens
-
-                if not choice.message.tool_calls:
-                    return AgentResult(
-                        response=choice.message.content or "No pude procesar tu solicitud.",
-                        agent_used=self.name,
-                        tokens_in=total_tokens_in,
-                        tokens_out=total_tokens_out,
+                for _ in range(max_tool_rounds):
+                    response = await self.client.messages.create(
+                        model=self.settings.anthropic_subagent_model,
+                        system=system_text,
+                        messages=filtered_msgs,
+                        tools=anthropic_tools,
+                        tool_choice={"type": "auto"},
+                        max_tokens=1500,
                     )
 
-                # Process tool calls
-                tool_call = choice.message.tool_calls[0]
-                tool_name = tool_call.function.name
-                tool_args = json.loads(tool_call.function.arguments)
+                    t_in, t_out = self._anthropic_tokens(response)
+                    total_tokens_in += t_in
+                    total_tokens_out += t_out
 
-                logger.info(
-                    f"Subscription tool call: {tool_name}",
-                    args=tool_args,
-                    mode=mode,
-                )
+                    if response.stop_reason != "tool_use":
+                        return AgentResult(
+                            response=self._extract_text(response) or "No pude procesar tu solicitud.",
+                            agent_used=self.name,
+                            tokens_in=total_tokens_in,
+                            tokens_out=total_tokens_out,
+                        )
 
-                tool_result = await self._execute_tool(
-                    tool_name=tool_name,
-                    args=tool_args,
-                    phone=phone,
-                    tenant_id=tenant_id,
-                )
+                    # Process tool call
+                    tool_info = self._extract_tool_use(response)
+                    if not tool_info:
+                        return AgentResult(
+                            response=self._extract_text(response) or "No pude procesar tu solicitud.",
+                            agent_used=self.name,
+                            tokens_in=total_tokens_in,
+                            tokens_out=total_tokens_out,
+                        )
 
-                # Append assistant message with tool call
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": choice.message.content or None,
-                        "tool_calls": [
-                            {
-                                "id": tool_call.id,
-                                "type": "function",
-                                "function": {
-                                    "name": tool_name,
-                                    "arguments": tool_call.function.arguments,
-                                },
-                            }
-                        ],
-                    }
-                )
+                    tool_name, tool_args, tool_use_id = tool_info
 
-                # Append tool result
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": json.dumps(tool_result, ensure_ascii=False),
-                    }
-                )
+                    logger.info(
+                        f"Subscription tool call: {tool_name}",
+                        args=tool_args,
+                        mode=mode,
+                    )
 
-                # Always continue the loop so LLM can format the response
+                    tool_result = await self._execute_tool(
+                        tool_name=tool_name,
+                        args=tool_args,
+                        phone=phone,
+                        tenant_id=tenant_id,
+                    )
+
+                    # Append assistant message with raw content blocks
+                    filtered_msgs.append({"role": "assistant", "content": response.content})
+
+                    # Append tool result
+                    filtered_msgs.append(
+                        self._build_tool_result_msg(tool_use_id, json.dumps(tool_result, ensure_ascii=False))
+                    )
+
+                    # Always continue the loop so LLM can format the response
+
+            else:
+                # OpenAI provider (rollback path)
+                for _ in range(max_tool_rounds):
+                    response = await self.client.chat.completions.create(
+                        model=self.settings.openai_model,
+                        messages=messages,
+                        tools=tools,
+                        tool_choice="auto",
+                        temperature=0.4,
+                        max_completion_tokens=1500,
+                    )
+
+                    choice = response.choices[0]
+                    if response.usage:
+                        total_tokens_in += response.usage.prompt_tokens
+                        total_tokens_out += response.usage.completion_tokens
+
+                    if not choice.message.tool_calls:
+                        return AgentResult(
+                            response=choice.message.content or "No pude procesar tu solicitud.",
+                            agent_used=self.name,
+                            tokens_in=total_tokens_in,
+                            tokens_out=total_tokens_out,
+                        )
+
+                    # Process tool calls
+                    tool_call = choice.message.tool_calls[0]
+                    tool_name = tool_call.function.name
+                    tool_args = json.loads(tool_call.function.arguments)
+
+                    logger.info(
+                        f"Subscription tool call: {tool_name}",
+                        args=tool_args,
+                        mode=mode,
+                    )
+
+                    tool_result = await self._execute_tool(
+                        tool_name=tool_name,
+                        args=tool_args,
+                        phone=phone,
+                        tenant_id=tenant_id,
+                    )
+
+                    # Append assistant message with tool call
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": choice.message.content or None,
+                            "tool_calls": [
+                                {
+                                    "id": tool_call.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tool_name,
+                                        "arguments": tool_call.function.arguments,
+                                    },
+                                }
+                            ],
+                        }
+                    )
+
+                    # Append tool result
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": json.dumps(tool_result, ensure_ascii=False),
+                        }
+                    )
+
+                    # Always continue the loop so LLM can format the response
 
             # Max rounds reached
             return AgentResult(
