@@ -96,6 +96,11 @@ class CalendarAgent(BaseAgent):
                             "duration_minutes": {"type": "integer", "description": "Duración en minutos"},
                             "location": {"type": "string", "description": "Ubicación"},
                             "description": {"type": "string", "description": "Descripción"},
+                            "recurrence": {
+                                "type": "string",
+                                "enum": ["none", "daily", "weekly", "monthly", "weekdays"],
+                                "description": "Frecuencia de repetición",
+                            },
                         },
                         "required": ["title", "date"],
                     },
@@ -113,6 +118,7 @@ class CalendarAgent(BaseAgent):
                             "start_date": {"type": "string", "description": "Inicio del rango"},
                             "end_date": {"type": "string", "description": "Fin del rango"},
                             "search": {"type": "string", "description": "Buscar por texto"},
+                            "only_mine": {"type": "boolean", "description": "Solo eventos creados por mí (default: todos del hogar)"},
                         },
                     },
                 },
@@ -231,6 +237,42 @@ class CalendarAgent(BaseAgent):
                         "type": "object",
                         "properties": {
                             "search_query": {"type": "string", "description": "Texto para buscar"},
+                        },
+                        "required": ["search_query"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "modificar_recordatorio",
+                    "description": "Modifica un recordatorio existente",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "search_query": {"type": "string", "description": "Texto para buscar el recordatorio"},
+                            "message": {"type": "string", "description": "Nuevo mensaje"},
+                            "trigger_date": {"type": "string", "description": "Nueva fecha YYYY-MM-DD"},
+                            "trigger_time": {"type": "string", "description": "Nueva hora HH:MM"},
+                            "recurrence": {
+                                "type": "string",
+                                "enum": ["none", "daily", "weekly", "monthly"],
+                                "description": "Nueva frecuencia",
+                            },
+                        },
+                        "required": ["search_query"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "completar_recordatorio",
+                    "description": "Marca un recordatorio como completado/hecho",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "search_query": {"type": "string", "description": "Texto para buscar el recordatorio"},
                         },
                         "required": ["search_query"],
                     },
@@ -465,6 +507,7 @@ class CalendarAgent(BaseAgent):
                     "duration_minutes": args.get("duration_minutes", 60),
                     "location": args.get("location"),
                     "description": args.get("description"),
+                    "recurrence": args.get("recurrence"),
                     "user_phone": phone,
                 }
                 payload = {k: v for k, v in payload.items() if v is not None}
@@ -472,8 +515,10 @@ class CalendarAgent(BaseAgent):
                     f"{base_path}/agent/calendar/event", json=payload,
                 )
             elif tool_name == "listar_eventos":
-                params = {k: v for k, v in args.items() if v}
+                params = {k: v for k, v in args.items() if v and k != "only_mine"}
                 params["user_phone"] = phone
+                if args.get("only_mine"):
+                    params["only_mine"] = "true"
                 response = await backend.get(
                     f"{base_path}/agent/calendar/events", params=params,
                 )
@@ -546,6 +591,30 @@ class CalendarAgent(BaseAgent):
                     f"{base_path}/agent/reminders/search",
                     params=params,
                 )
+            elif tool_name == "modificar_recordatorio":
+                params = {
+                    "search_query": args.get("search_query", ""),
+                    "user_phone": phone,
+                }
+                if args.get("message"):
+                    params["message"] = args["message"]
+                if args.get("trigger_date"):
+                    params["trigger_date"] = args["trigger_date"]
+                if args.get("trigger_time"):
+                    params["trigger_time"] = args["trigger_time"]
+                if args.get("recurrence"):
+                    params["recurrence"] = args["recurrence"]
+                response = await backend.put(
+                    f"{base_path}/agent/reminders/search", params=params,
+                )
+            elif tool_name == "completar_recordatorio":
+                params = {
+                    "search_query": args.get("search_query", ""),
+                    "user_phone": phone,
+                }
+                response = await backend.post(
+                    f"{base_path}/agent/reminders/complete", params=params,
+                )
             else:
                 return {"success": False, "error": f"Unknown tool: {tool_name}"}
 
@@ -598,8 +667,13 @@ class CalendarAgent(BaseAgent):
         _, time_str = self._parse_event_datetime(event)
         location = event.get("location", "")
         line = f"• {time_str} - {title}" if time_str else f"• {title}"
+        if event.get("creator_name"):
+            line += f" (por {event['creator_name']})"
         if location:
             line += f"\n  📍 {location}"
+        if event.get("is_recurring"):
+            line = "🔄 " + line.lstrip("• ")
+            line = "• " + line
         return line
 
     async def _get_google_connect_tip(self, tenant_id: str, phone: str) -> str | None:
@@ -669,6 +743,21 @@ class CalendarAgent(BaseAgent):
                 response += f"\n📍 {location}"
             response += f"\n⏱️ Duración: {duration} min"
 
+            recurrence = event.get("recurrence_rule") or args.get("recurrence")
+            if recurrence and recurrence != "none":
+                recurrence_labels = {
+                    "daily": "Todos los días",
+                    "weekly": "Todas las semanas",
+                    "monthly": "Todos los meses",
+                    "weekdays": "De lunes a viernes",
+                }
+                response += f"\n🔄 {recurrence_labels.get(recurrence, recurrence)}"
+
+            conflicts = data.get("conflicts")
+            if conflicts:
+                conflict_titles = [c.get("title", "") for c in conflicts[:2]]
+                response += f"\n\n⚠️ Ojo: a esa hora también tenés: {', '.join(conflict_titles)}"
+
             sync_status = event.get("sync_status", "local")
             if sync_status != "synced":
                 google_tip = await self._get_google_connect_tip(tenant_id, phone)
@@ -682,7 +771,7 @@ class CalendarAgent(BaseAgent):
             if not events:
                 return "📅 No tenés eventos programados para ese período."
 
-            response = "📅 Tus eventos:\n\n"
+            response = "📅 Eventos:\n\n"
             for event in events[:10]:
                 response += self._format_event_line(event) + "\n"
 
@@ -851,6 +940,22 @@ class CalendarAgent(BaseAgent):
             if deleted:
                 r_message = data.get("message", "")
                 return f"✅ Recordatorio cancelado:\n\"{r_message}\""
+            else:
+                return "❌ No encontré un recordatorio que coincida."
+
+        elif tool_name == "modificar_recordatorio":
+            updated = data.get("updated", False)
+            if updated:
+                r_message = data.get("message", "")
+                return f"✏️ Recordatorio modificado:\n\"{r_message}\""
+            else:
+                return "❌ No encontré un recordatorio que coincida."
+
+        elif tool_name == "completar_recordatorio":
+            completed = data.get("completed", False)
+            if completed:
+                r_message = data.get("message", "")
+                return f"✅ Recordatorio completado:\n\"{r_message}\""
             else:
                 return "❌ No encontré un recordatorio que coincida."
 
