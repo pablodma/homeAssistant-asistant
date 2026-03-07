@@ -28,16 +28,14 @@ from .base import AgentResult, BaseAgent, _LANGFUSE_ENABLED
 from ..config import get_settings
 from ..services.llm_breaker import CircuitBreakerOpenError, get_circuit_breaker
 
+# Use Langfuse's OpenAI wrapper for automatic LLM tracing when enabled.
 if _LANGFUSE_ENABLED:
-    from langfuse.openai import AsyncOpenAI
-    from langfuse.decorators import observe
+    try:
+        from langfuse.openai import AsyncOpenAI
+    except ImportError:
+        from openai import AsyncOpenAI
 else:
     from openai import AsyncOpenAI
-
-    def observe(**kwargs):  # noqa: D103 — no-op decorator when Langfuse is off
-        def decorator(func):
-            return func
-        return decorator
 
 logger = structlog.get_logger()
 
@@ -224,7 +222,6 @@ class RouterAgent(BaseAgent):
     # Public interface
     # -----------------------------------------------------------------------
 
-    @observe(name="router_turn")
     async def process(
         self,
         message: str,
