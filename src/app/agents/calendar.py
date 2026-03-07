@@ -283,6 +283,35 @@ class CalendarAgent(BaseAgent):
                 # Execute the tool
                 tool_result = await self._execute_tool(tool_name, tool_args, tenant_id, phone)
 
+                # First-time flow: feed tool result back to LLM for guided onboarding
+                # (same pattern as completar_configuracion_inicial above)
+                if is_first_time:
+                    messages.append({
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{"id": tool_call.id, "type": "function", "function": {"name": tool_name, "arguments": tool_call.function.arguments}}],
+                    })
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": json.dumps(tool_result, ensure_ascii=False, default=str),
+                    })
+                    follow_up = await self.client.chat.completions.create(
+                        model=self.settings.openai_model,
+                        messages=messages,
+                        temperature=0.4,
+                        max_completion_tokens=1000,
+                    )
+                    follow_tokens_in = follow_up.usage.prompt_tokens if follow_up.usage else 0
+                    follow_tokens_out = follow_up.usage.completion_tokens if follow_up.usage else 0
+                    return AgentResult(
+                        response=follow_up.choices[0].message.content or "¡Bienvenido al módulo de agenda!",
+                        agent_used=self.name,
+                        tokens_in=(tokens_in or 0) + follow_tokens_in,
+                        tokens_out=(tokens_out or 0) + follow_tokens_out,
+                        metadata={"tool": tool_name, "result": tool_result, "first_time_flow": True},
+                    )
+
                 # Generate response based on tool result
                 response_text = await self._generate_response(
                     tool_name, tool_args, tool_result, message,
