@@ -519,8 +519,6 @@ class FinanceAgent(BaseAgent):
             if self.provider == "anthropic":
                 # --- Anthropic path ---
                 anthropic_tools = [openai_tool_to_anthropic(t) for t in tools]
-                if is_first_time:
-                    anthropic_tools.append(FIRST_TIME_TOOL_DEFINITION_ANTHROPIC)
 
                 system_text, filtered_msgs = self._extract_system_and_messages(messages)
                 last_tool_name = None
