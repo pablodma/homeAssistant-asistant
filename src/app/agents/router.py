@@ -23,11 +23,21 @@ from typing_extensions import TypedDict
 import structlog
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
-from openai import AsyncOpenAI
 
-from .base import AgentResult, BaseAgent
+from .base import AgentResult, BaseAgent, _LANGFUSE_ENABLED
 from ..config import get_settings
 from ..services.llm_breaker import CircuitBreakerOpenError, get_circuit_breaker
+
+if _LANGFUSE_ENABLED:
+    from langfuse.openai import AsyncOpenAI
+    from langfuse.decorators import observe
+else:
+    from openai import AsyncOpenAI
+
+    def observe(**kwargs):  # noqa: D103 — no-op decorator when Langfuse is off
+        def decorator(func):
+            return func
+        return decorator
 
 logger = structlog.get_logger()
 
@@ -214,6 +224,7 @@ class RouterAgent(BaseAgent):
     # Public interface
     # -----------------------------------------------------------------------
 
+    @observe(name="router_turn")
     async def process(
         self,
         message: str,
@@ -228,18 +239,6 @@ class RouterAgent(BaseAgent):
             phone=phone,
             message=message[:50] + "..." if len(message) > 50 else message,
         )
-
-        # Langfuse tracing — wraps the full turn as a root span
-        if getattr(self, "_langfuse_enabled", False):
-            try:
-                from langfuse.decorators import langfuse_context
-                langfuse_context.update_current_observation(
-                    name="router_turn",
-                    input={"message": message[:300], "tenant_id": tenant_id},
-                    metadata={"phone_suffix": phone[-4:] if phone else "????"},
-                )
-            except Exception:
-                pass
 
         graph = await self._get_compiled_graph()
 
