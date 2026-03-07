@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
 # Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.6.14 /uv /bin/uv
 
 WORKDIR /app
 
@@ -14,7 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY pyproject.toml uv.lock ./
 
 # Install production dependencies
-RUN uv sync --no-dev --system --frozen
+ENV UV_COMPILE_BYTECODE=1
+RUN uv sync --no-dev --frozen
 
 # Copy application code
 COPY src/ src/
@@ -30,4 +31,4 @@ USER appuser
 EXPOSE ${PORT:-8000}
 
 # Run the application
-CMD ["sh", "-c", "uvicorn src.app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", ".venv/bin/uvicorn src.app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
