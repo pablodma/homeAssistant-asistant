@@ -4,9 +4,15 @@ from datetime import datetime, timezone
 
 import pytest
 
+import src.app.services.message_guards as guards_module
+from src.app.services.message_guards import GuardResult
 from src.app.services.phone_resolver import PhoneTenantInfo
 from src.app.whatsapp import webhook as webhook_module
 from src.app.whatsapp.types import IncomingMessage, WhatsAppMessage
+
+
+async def _no_rate_limit(phone: str, max_per_minute: int = 20) -> GuardResult:  # noqa: ARG001
+    return GuardResult(should_block=False, guard_name="rate_limit")
 
 
 class _FakeWhatsAppClient:
@@ -67,7 +73,7 @@ async def test_process_message_blocks_when_subscription_not_authorized(monkeypat
     monkeypatch.setattr(webhook_module, "get_phone_resolver", lambda: _FakeResolver())
     monkeypatch.setattr(webhook_module, "_handle_subscription_required_user", _fake_handle_subscription_required_user)
     monkeypatch.setattr(webhook_module, "RouterAgent", _FailRouter)
-    monkeypatch.setattr(webhook_module, "_is_rate_limited", lambda *args, **kwargs: False)
+    monkeypatch.setattr(guards_module, "check_rate_limit", _no_rate_limit)
 
     message = IncomingMessage(
         message_id="msg-1",
@@ -105,7 +111,7 @@ async def test_process_message_routes_access_web_button_click(monkeypatch):
     monkeypatch.setattr(webhook_module, "get_phone_resolver", lambda: _FakeResolver())
     monkeypatch.setattr(webhook_module, "_handle_access_web_button_click", _fake_handle_access_web_button_click)
     monkeypatch.setattr(webhook_module, "_handle_unregistered_user", _fail_unregistered_handler)
-    monkeypatch.setattr(webhook_module, "_is_rate_limited", lambda *args, **kwargs: False)
+    monkeypatch.setattr(guards_module, "check_rate_limit", _no_rate_limit)
 
     message = IncomingMessage(
         message_id="msg-access-cta-1",
@@ -146,7 +152,7 @@ async def test_process_message_routes_access_web_button_click_from_text_fallback
     monkeypatch.setattr(webhook_module, "get_phone_resolver", lambda: _FakeResolver())
     monkeypatch.setattr(webhook_module, "_handle_access_web_button_click", _fake_handle_access_web_button_click)
     monkeypatch.setattr(webhook_module, "_handle_unregistered_user", _fail_unregistered_handler)
-    monkeypatch.setattr(webhook_module, "_is_rate_limited", lambda *args, **kwargs: False)
+    monkeypatch.setattr(guards_module, "check_rate_limit", _no_rate_limit)
 
     message = IncomingMessage(
         message_id="msg-access-cta-2",

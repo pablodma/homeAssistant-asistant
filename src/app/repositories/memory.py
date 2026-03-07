@@ -154,3 +154,15 @@ class MemoryRepository:
                 session_key=session_key,
                 error=str(e),
             )
+
+    async def get_conversation_summary(self, session_key: str) -> Optional[str]:
+        """Get the rolling summary for a session."""
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT conversation_summary FROM chat_sessions WHERE session_key = $1",
+                session_key,
+            )
+            if row:
+                return row["conversation_summary"]
+            return None

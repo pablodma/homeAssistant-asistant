@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .config.database import close_pool, get_pool
+from .middleware.correlation import CorrelationMiddleware
 from .routers.internal import router as internal_router
 from .whatsapp.webhook import router as webhook_router
 
@@ -65,6 +66,10 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST"],
         allow_headers=["*"],
     )
+
+    # Correlation ID middleware — must come BEFORE CORS to ensure all requests get an ID
+    # (In Starlette, middleware is applied in reverse order of registration)
+    app.add_middleware(CorrelationMiddleware)
 
     # Health check
     @app.get("/health")

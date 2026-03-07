@@ -7,10 +7,31 @@ from typing import Any, Optional
 import structlog
 
 from ..config import get_settings
+from ..config import get_settings as _get_settings  # alias used by _init_langfuse
 from ..services.backend_client import get_backend_client
 from ..services.prompt_loader import PromptLoader
 
 logger = structlog.get_logger()
+
+
+def _init_langfuse() -> bool:
+    """Initialize Langfuse if configured. Returns True if enabled."""
+    settings = _get_settings()
+    if not settings.langfuse_enabled or not settings.langfuse_secret_key:
+        return False
+    try:
+        from langfuse import Langfuse
+        Langfuse(
+            secret_key=settings.langfuse_secret_key,
+            public_key=settings.langfuse_public_key,
+            host=settings.langfuse_host,
+        )
+        return True
+    except Exception:
+        return False
+
+
+_LANGFUSE_ENABLED = _init_langfuse()
 
 FIRST_TIME_AGENTS: set[str] = {"finance", "agenda", "shopping", "vehicle"}
 
@@ -52,6 +73,7 @@ class BaseAgent(ABC):
         self.settings = get_settings()
         self.prompt_loader = PromptLoader()
         self._prompt: Optional[str] = None
+        self._langfuse_enabled = _LANGFUSE_ENABLED
 
     async def get_prompt(self, tenant_id: str) -> str:
         """Get the prompt for this agent.

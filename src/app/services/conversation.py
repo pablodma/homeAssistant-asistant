@@ -1,7 +1,7 @@
 """Conversation memory service."""
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Union
 
 import structlog
 
@@ -111,3 +111,39 @@ class ConversationService:
         """
         onboarding_key = f"{self.ONBOARDING_PREFIX}_{phone}"
         await self.repo.clear_messages(onboarding_key)
+
+    async def get_summary(
+        self,
+        phone: str,
+        tenant_id: str = "",
+    ) -> Optional[str]:
+        """Get the rolling summary for this conversation, if available."""
+        session_key = self._session_key(phone, tenant_id)
+        return await self.repo.get_conversation_summary(session_key)
+
+    async def get_hybrid_context(
+        self,
+        phone: str,
+        tenant_id: str = "",
+    ) -> dict:
+        """Get hybrid memory context: rolling summary + immediate message window.
+
+        Returns:
+            {
+                "summary": str | None,      # pre-computed rolling summary
+                "recent_messages": list[Message],  # last N messages in window
+            }
+        """
+        from ..config import get_settings
+        settings = get_settings()
+        limit = settings.immediate_memory_max_messages
+        session_key = self._session_key(phone, tenant_id)
+
+        summary = await self.repo.get_conversation_summary(session_key)
+        messages = await self.repo.get_messages(session_key, limit)
+        recent = [
+            Message(role=m["role"], content=m["content"], timestamp=m.get("timestamp"))
+            for m in messages
+        ]
+
+        return {"summary": summary, "recent_messages": recent}

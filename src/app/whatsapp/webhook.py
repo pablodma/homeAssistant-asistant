@@ -10,6 +10,7 @@ import hmac
 from urllib.parse import urlsplit, urlunsplit
 
 import structlog
+import structlog.contextvars
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
 
 from ..config import get_settings
@@ -35,27 +36,10 @@ from .types import IncomingMessage, WhatsAppWebhookPayload
 logger = structlog.get_logger()
 router = APIRouter(tags=["WhatsApp Webhook"])
 
-# Per-phone rate limiter (in-memory, resets on restart)
-_rate_limit_store: dict[str, list[float]] = {}
 ACCESS_WEB_BUTTON_ID = "access_open_web"
 ACCESS_WEB_BUTTON_TITLE = "ir a la web"
 PRODUCTION_FRONTEND_URL = "https://aira-home.io"
 DEVELOPMENT_FRONTEND_URL = "https://home-assistant-frontend-brown.vercel.app"
-
-
-def _is_rate_limited(phone: str, max_per_minute: int = 20) -> bool:
-    """Check if a phone number has exceeded the rate limit."""
-    import time
-
-    now = time.time()
-    window = 60.0
-
-    timestamps = _rate_limit_store.get(phone, [])
-    timestamps = [t for t in timestamps if now - t < window]
-    timestamps.append(now)
-    _rate_limit_store[phone] = timestamps
-
-    return len(timestamps) > max_per_minute
 
 
 # QA Agent singleton
@@ -128,9 +112,18 @@ async def receive_webhook(
             ):
                 logger.warning("Invalid webhook signature")
                 raise HTTPException(status_code=401, detail="Invalid signature")
-        elif settings.is_production:
-            logger.error("WHATSAPP_APP_SECRET not configured in production")
-            raise HTTPException(status_code=500, detail="Webhook verification not configured")
+        else:
+            # Require APP_SECRET in all environments -- without it any actor
+            # can forge messages. In production this is a hard error; in
+            # development it logs a warning so local testing still works.
+            if settings.is_production:
+                logger.error("WHATSAPP_APP_SECRET not configured in production")
+                raise HTTPException(status_code=500, detail="Webhook verification not configured")
+            else:
+                logger.warning(
+                    "WHATSAPP_APP_SECRET not set -- webhook signature validation disabled. "
+                    "Set it in .env for security."
+                )
 
         import json
         body = json.loads(raw_body)
@@ -197,6 +190,15 @@ async def process_message(message: IncomingMessage) -> None:
     import time
 
     start_time = time.time()
+
+    from ..middleware.correlation import get_correlation_id
+    correlation_id = get_correlation_id()
+
+    structlog.contextvars.bind_contextvars(
+        correlation_id=correlation_id,
+        phone_suffix=message.phone[-4:] if message.phone else "????",
+    )
+
     whatsapp = get_whatsapp_client()
     quality_logger = get_quality_logger()
 
@@ -208,12 +210,13 @@ async def process_message(message: IncomingMessage) -> None:
     selected_quick_action_expense_id: str | None = None
 
     settings = get_settings()
-    if _is_rate_limited(message.phone, settings.max_messages_per_minute):
+    from ..services.message_guards import check_rate_limit
+    rate_result = await check_rate_limit(message.phone, settings.max_messages_per_minute)
+    if rate_result.should_block:
         logger.warning("Rate limited", phone=message.phone)
-        whatsapp = get_whatsapp_client()
         await whatsapp.send_text(
             message.phone,
-            "Estás enviando mensajes muy rápido. Esperá un momento e intentá de nuevo.",
+            "Estas enviando mensajes muy rapido. Espera un momento e intenta de nuevo.",
         )
         return
 
@@ -314,22 +317,28 @@ async def process_message(message: IncomingMessage) -> None:
             await _handle_access_web_button_click(message, phone_info, whatsapp)
             return
 
-        if not phone_info:
+        # Access guards: registration → onboarding → subscription (composable, ordered)
+        from ..services.message_guards import (
+            check_registered,
+            check_onboarding_complete,
+            check_subscription_active,
+        )
+
+        reg_guard = await check_registered(phone_info)
+        if reg_guard.should_block:
             logger.info("unregistered_phone_onboarding", phone=message.phone)
             await _handle_unregistered_user(message, whatsapp)
             return
 
-        if not phone_info.onboarding_completed:
-            logger.info(
-                "setup_pending",
-                phone=message.phone,
-                tenant_id=phone_info.tenant_id,
-            )
+        onboard_guard = await check_onboarding_complete(phone_info)
+        if onboard_guard.should_block:
+            logger.info("setup_pending", phone=message.phone, tenant_id=phone_info.tenant_id)
             phone_resolver.invalidate_cache(message.phone)
             await _handle_setup_user(message, phone_info, whatsapp)
             return
 
-        if not phone_info.has_active_subscription:
+        sub_guard = await check_subscription_active(phone_info)
+        if sub_guard.should_block:
             logger.info(
                 "subscription_required",
                 phone=message.phone,
