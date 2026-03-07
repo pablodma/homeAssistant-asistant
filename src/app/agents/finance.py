@@ -153,9 +153,14 @@ class FinanceAgent(BaseAgent):
 
         prompt = await self.get_prompt(tenant_id)
 
+        # Inject current date so the LLM knows what "this month" means
+        from datetime import date as _date
+        today = _date.today()
+        date_context = f"\n\n[FECHA_ACTUAL] Hoy es {today.strftime('%d/%m/%Y')} ({today.strftime('%A')}). Mes actual: {today.month}, Año: {today.year}."
+
         # Build messages
         messages = [
-            {"role": "system", "content": prompt},
+            {"role": "system", "content": prompt + date_context},
         ]
 
         # Add history context
