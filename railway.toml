@@ -3,13 +3,7 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "uvicorn src.app.main:app --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
-
-[[deploy.cronJobs]]
-name = "rolling-summaries"
-schedule = "0 7,21 * * *"
-command = "python -m src.app.crons.generate_rolling_summaries"
