@@ -5,9 +5,7 @@ Architecture:
 
   orchestrate_node: Anthropic LLM with 5 domain tools, receives structured
                     ToolOutput from sub-agents, formulates ALL user responses.
-  guardrails_node:  3-layer response security (reused from RouterAgent).
-
-The supervisor replaces the RouterAgent when supervisor_mode_enabled=True.
+  guardrails_node:  3-layer response security pipeline.
 """
 
 from __future__ import annotations
@@ -57,10 +55,9 @@ class SupervisorState(TypedDict):
 class SupervisorAgent(BaseAgent):
     """Supervisor agent that orchestrates sub-agents and formulates all responses.
 
-    Unlike the RouterAgent (which uses OpenAI for routing and passes through
-    sub-agent text), the SupervisorAgent uses Anthropic claude-haiku as the
-    central LLM. Sub-agents return structured ToolOutput data, and the
-    supervisor formulates ALL user-facing responses in Aira's voice.
+    Uses Anthropic claude-haiku as the central LLM. Sub-agents return structured
+    ToolOutput data, and the supervisor formulates ALL user-facing responses
+    in Aira's voice.
     """
 
     name = "supervisor"

@@ -1,4 +1,4 @@
-"""Tests for webhook access gating before router execution."""
+"""Tests for webhook access gating before orchestrator execution."""
 
 from datetime import datetime, timezone
 
@@ -65,14 +65,14 @@ async def test_process_message_blocks_when_subscription_not_authorized(monkeypat
         nonlocal blocked_called
         blocked_called = True
 
-    class _FailRouter:
+    class _FailSupervisor:
         async def process(self, *args, **kwargs):  # noqa: ARG002
-            raise AssertionError("RouterAgent no debería ejecutarse sin suscripción authorized")
+            raise AssertionError("SupervisorAgent no debería ejecutarse sin suscripción authorized")
 
     monkeypatch.setattr(webhook_module, "get_whatsapp_client", lambda: _FakeWhatsAppClient())
     monkeypatch.setattr(webhook_module, "get_phone_resolver", lambda: _FakeResolver())
     monkeypatch.setattr(webhook_module, "_handle_subscription_required_user", _fake_handle_subscription_required_user)
-    monkeypatch.setattr(webhook_module, "RouterAgent", _FailRouter)
+    monkeypatch.setattr(webhook_module, "SupervisorAgent", _FailSupervisor)
     monkeypatch.setattr(guards_module, "check_rate_limit", _no_rate_limit)
 
     message = IncomingMessage(

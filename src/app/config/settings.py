@@ -31,10 +31,7 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str
     openai_model: str = "gpt-4.1-mini"
-    openai_router_model: str = "gpt-4.1-nano"
-    orchestrator_finalizer_enabled: bool = False
-    orchestrator_finalize_on_multi_agent_only: bool = True
-    orchestrator_finalizer_model: str = "gpt-4.1-nano"
+    openai_guardrails_model: str = "gpt-4.1-nano"
     whisper_model: str = "whisper-1"
 
     # Anthropic (used by QA, Prompt Improver, and sub-agents)
@@ -103,9 +100,6 @@ class Settings(BaseSettings):
     langfuse_public_key: str = ""
     langfuse_host: str = "https://cloud.langfuse.com"
     langfuse_enabled: bool = False
-
-    # Supervisor mode (replaces Router with Supervisor pattern)
-    supervisor_mode_enabled: bool = False
 
     # Response Guardrails (post-LLM security checks)
     final_security_check_enabled: bool = False

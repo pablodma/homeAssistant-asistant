@@ -135,7 +135,7 @@ async def _check_injection(user_message: str, bot_response: str) -> float:
     )
 
     response = await client.chat.completions.create(
-        model=settings.openai_router_model,  # cheap nano model
+        model=settings.openai_guardrails_model,  # cheap nano model
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
         max_completion_tokens=100,
@@ -165,7 +165,7 @@ async def _check_coherence(user_message: str, bot_response: str) -> float:
     )
 
     response = await client.chat.completions.create(
-        model=settings.openai_router_model,
+        model=settings.openai_guardrails_model,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
         max_completion_tokens=60,

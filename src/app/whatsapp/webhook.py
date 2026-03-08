@@ -14,7 +14,6 @@ import structlog.contextvars
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
 
 from ..config import get_settings
-from ..agents.router import RouterAgent
 from ..agents.supervisor import SupervisorAgent
 from ..agents.qa import QAAgent
 from ..services.conversation import ConversationService
@@ -420,10 +419,7 @@ async def process_message(message: IncomingMessage) -> None:
 
         # Process message through orchestrator agent
         # All decision logic is in the agent prompts - the code just routes and sends
-        if settings.supervisor_mode_enabled:
-            orchestrator = SupervisorAgent()
-        else:
-            orchestrator = RouterAgent()
+        orchestrator = SupervisorAgent()
         result = await orchestrator.process(
             message=message.text,
             phone=message.phone,
