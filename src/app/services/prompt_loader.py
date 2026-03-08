@@ -33,6 +33,7 @@ PROMPT_FILES = {
     "vehicle": "vehicle-agent.md",
     "subscription": "subscription-agent.md",
     "router": "router-agent.md",
+    "supervisor": "supervisor-agent.md",
     "router-finalizer": "router-finalizer-agent.md",
     "qa": "qa-agent.md",
     "prompt-improver": "prompt-improver-agent.md",

@@ -469,9 +469,15 @@ class SupervisorAgent(BaseAgent):
                     tool_output=last_tool_output,
                 )
 
-            # Process tool call — call sub-agent
-            tool_info = self._extract_tool_use(response)
-            if not tool_info:
+            # Extract ALL tool_use blocks (Anthropic may return multiple for
+            # cross-domain, e.g. "gasté 3000 y recordame pagar la luz").
+            tool_uses = [
+                (block.name, block.input, block.id)
+                for block in response.content
+                if block.type == "tool_use"
+            ]
+
+            if not tool_uses:
                 final_text = self._extract_text(response) or "No pude procesar tu solicitud."
                 return AgentResult(
                     response=final_text,
@@ -480,95 +486,93 @@ class SupervisorAgent(BaseAgent):
                     tokens_out=total_tokens_out,
                 )
 
-            tool_name, tool_args, tool_use_id = tool_info
-            agent_name = tool_name.replace("_agent", "")
+            # Append assistant message once (contains all tool_use blocks)
+            filtered_msgs.append({"role": "assistant", "content": response.content})
 
-            logger.info(
-                "Supervisor routing to sub-agent",
-                agent=agent_name,
-                request=str(tool_args.get("user_request", ""))[:80],
-            )
+            # Process each tool call and collect all results
+            tool_results_content: list[dict[str, Any]] = []
 
-            sub_agent = self._get_sub_agent(agent_name)
-            if not sub_agent:
-                logger.warning("Unknown sub-agent requested by supervisor", agent=agent_name)
-                filtered_msgs.append({"role": "assistant", "content": response.content})
-                filtered_msgs.append(self._build_tool_result_msg(
-                    tool_use_id,
-                    json.dumps({"success": False, "error": f"Agente desconocido: {agent_name}"}),
-                ))
-                continue
+            for tool_name, tool_args, tool_use_id in tool_uses:
+                agent_name = tool_name.replace("_agent", "")
 
-            try:
-                user_request = tool_args.get("user_request", message)
-                if not isinstance(user_request, str) or not user_request.strip():
-                    user_request = message
-
-                sub_result = await sub_agent.process(
-                    message=user_request,
-                    phone=phone,
-                    tenant_id=tenant_id,
-                    history=history,
-                )
-
-                agents_used.append(agent_name)
-                total_tokens_in += sub_result.tokens_in or 0
-                total_tokens_out += sub_result.tokens_out or 0
-
-                # Extract ToolOutput if available, else build from metadata
-                tool_output = sub_result.tool_output
-                if tool_output is None and sub_result.metadata:
-                    # Backward compat: build ToolOutput from old metadata format
-                    meta = sub_result.metadata
-                    tool_output = ToolOutput(
-                        success=True,
-                        domain=agent_name,
-                        tool_name=meta.get("tool", "unknown"),
-                        tool_args=meta.get("tool_args", {}),
-                        data=(
-                            meta.get("result", {}).get("data", {})
-                            if isinstance(meta.get("result"), dict)
-                            else {}
-                        ),
-                        formatted_text=sub_result.response,
-                    )
-
-                last_tool_output = tool_output
-
-                # Collect quick actions from sub-agent
-                if sub_result.metadata and isinstance(sub_result.metadata, dict):
-                    qa = sub_result.metadata.get("quick_actions")
-                    if qa:
-                        collected_quick_actions = qa
-
-                # Build tool result for supervisor to reason about
-                if tool_output:
-                    tool_result_json = self._tool_output_to_json(tool_output)
-                else:
-                    tool_result_json = json.dumps(
-                        {
-                            "success": True,
-                            "domain": agent_name,
-                            "response_text": sub_result.response,
-                        },
-                        ensure_ascii=False,
-                    )
-
-            except Exception as exc:
-                logger.error(
-                    "Sub-agent execution failed",
+                logger.info(
+                    "Supervisor routing to sub-agent",
                     agent=agent_name,
-                    error=str(exc),
+                    request=str(tool_args.get("user_request", ""))[:80],
                 )
-                tool_result_json = json.dumps({
-                    "success": False,
-                    "domain": agent_name,
-                    "error": str(exc),
+
+                sub_agent = self._get_sub_agent(agent_name)
+                if not sub_agent:
+                    logger.warning("Unknown sub-agent requested by supervisor", agent=agent_name)
+                    tool_results_content.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": json.dumps({"success": False, "error": f"Agente desconocido: {agent_name}"}),
+                    })
+                    continue
+
+                try:
+                    user_request = tool_args.get("user_request", message)
+                    if not isinstance(user_request, str) or not user_request.strip():
+                        user_request = message
+
+                    sub_result = await sub_agent.process(
+                        message=user_request,
+                        phone=phone,
+                        tenant_id=tenant_id,
+                        history=history,
+                    )
+
+                    agents_used.append(agent_name)
+                    total_tokens_in += sub_result.tokens_in or 0
+                    total_tokens_out += sub_result.tokens_out or 0
+
+                    # Extract ToolOutput if available, else build from metadata
+                    tool_output = sub_result.tool_output
+                    if tool_output is None and sub_result.metadata:
+                        meta = sub_result.metadata
+                        tool_output = ToolOutput(
+                            success=True,
+                            domain=agent_name,
+                            tool_name=meta.get("tool", "unknown"),
+                            tool_args=meta.get("tool_args", {}),
+                            data=(
+                                meta.get("result", {}).get("data", {})
+                                if isinstance(meta.get("result"), dict)
+                                else {}
+                            ),
+                            formatted_text=sub_result.response,
+                        )
+
+                    last_tool_output = tool_output
+
+                    # Collect quick actions from sub-agent
+                    if sub_result.metadata and isinstance(sub_result.metadata, dict):
+                        qa = sub_result.metadata.get("quick_actions")
+                        if qa:
+                            collected_quick_actions = qa
+
+                    # Build tool result for supervisor
+                    if tool_output:
+                        result_json = self._tool_output_to_json(tool_output)
+                    else:
+                        result_json = json.dumps(
+                            {"success": True, "domain": agent_name, "response_text": sub_result.response},
+                            ensure_ascii=False,
+                        )
+
+                except Exception as exc:
+                    logger.error("Sub-agent execution failed", agent=agent_name, error=str(exc))
+                    result_json = json.dumps({"success": False, "domain": agent_name, "error": str(exc)})
+
+                tool_results_content.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": result_json,
                 })
 
-            # Append to conversation for next round
-            filtered_msgs.append({"role": "assistant", "content": response.content})
-            filtered_msgs.append(self._build_tool_result_msg(tool_use_id, tool_result_json))
+            # Append ALL tool results in a single user message (Anthropic requirement)
+            filtered_msgs.append({"role": "user", "content": tool_results_content})
 
         # Max rounds reached without a final text response
         return AgentResult(
