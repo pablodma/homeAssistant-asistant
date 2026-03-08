@@ -4,6 +4,7 @@ This agent uses a prompt-first approach: all decision logic is in the prompt,
 the code only executes tools and formats responses.
 """
 
+import asyncio
 import json
 import re
 from typing import Any, Optional
@@ -274,9 +275,9 @@ class FinanceAgent(BaseAgent):
                             metadata=qa_metadata,
                         )
 
-                    # LLM called a tool -> execute, append result, loop again
-                    tool_info = self._extract_tool_use(response)
-                    if not tool_info:
+                    # LLM called tool(s) -> execute ALL, append results, loop or return
+                    tool_uses = self._extract_all_tool_uses(response)
+                    if not tool_uses:
                         text = self._extract_text(response)
                         qa_metadata = self._build_continue_quick_actions(last_tool_name)
                         return AgentResult(
@@ -287,64 +288,105 @@ class FinanceAgent(BaseAgent):
                             metadata=qa_metadata,
                         )
 
-                    tool_name, tool_args, tool_use_id = tool_info
+                    for tu_name, tu_args, _ in tool_uses:
+                        logger.info(f"Finance tool call: {tu_name}", args=tu_args)
 
-                    logger.info(f"Finance tool call: {tool_name}", args=tool_args)
+                    # Execute all tools in parallel
+                    tool_results = await asyncio.gather(*[
+                        execute_finance_tool(
+                            tu_name, tu_args, tenant_id,
+                            phone=phone, message_in=message,
+                        )
+                        for tu_name, tu_args, _ in tool_uses
+                    ])
 
-                    tool_result = await execute_finance_tool(
-                        tool_name, tool_args, tenant_id,
-                        phone=phone,
-                        message_in=message,
-                    )
+                    # Handle first-time completion markers
+                    resolved_results: list[dict[str, Any]] = []
+                    for tr in tool_results:
+                        if isinstance(tr.get("data"), dict) and tr["data"].get("first_time_tool"):
+                            result_msg = await self.complete_first_time(phone)
+                            resolved_results.append({"success": True, "data": {"message": result_msg}})
+                        else:
+                            resolved_results.append(tr)
 
-                    # Handle first-time completion marker from executor
-                    if isinstance(tool_result.get("data"), dict) and tool_result["data"].get("first_time_tool"):
-                        result_msg = await self.complete_first_time(phone)
-                        tool_result = {"success": True, "data": {"message": result_msg}}
-
-                    tool_result_for_llm = format_finance_tool_result_for_llm(
-                        tool_name, tool_args, tool_result
-                    )
-
-                    # Append assistant message with raw content blocks
+                    # Append assistant message with all tool_use blocks
                     filtered_msgs.append(
                         {"role": "assistant", "content": response.content}
                     )
-                    # Append tool result
-                    filtered_msgs.append(
-                        self._build_tool_result_msg(tool_use_id, tool_result_for_llm)
-                    )
 
-                    # These tools need LLM follow-up: continue loop so it can reason.
-                    if tool_name in (
-                        "consultar_presupuesto",
-                        "consultar_reporte",
-                        "completar_configuracion_inicial",
-                        "listar_categorias",
-                        "consultar_ingresos",
-                        "consultar_balance",
-                        "buscar_gastos",
-                    ):
-                        last_tool_name = tool_name
+                    # Append all tool results in a single user message
+                    tool_results_content = []
+                    for (tu_name, tu_args, tu_id), tr in zip(tool_uses, resolved_results):
+                        formatted = format_finance_tool_result_for_llm(tu_name, tu_args, tr)
+                        tool_results_content.append({
+                            "type": "tool_result",
+                            "tool_use_id": tu_id,
+                            "content": formatted,
+                        })
+                    filtered_msgs.append({"role": "user", "content": tool_results_content})
+
+                    # Tools that need LLM follow-up
+                    _CONTINUE_TOOLS = {
+                        "consultar_presupuesto", "consultar_reporte",
+                        "completar_configuracion_inicial", "listar_categorias",
+                        "consultar_ingresos", "consultar_balance", "buscar_gastos",
+                    }
+
+                    if any(tu_name in _CONTINUE_TOOLS for tu_name, _, _ in tool_uses):
+                        last_tool_name = tool_uses[-1][0]
                         continue
 
-                    # Other tools: return formatted response
-                    response_text = format_finance_response(tool_name, tool_args, tool_result)
+                    # All tools are immediate-return — build result
+                    if len(tool_uses) == 1:
+                        tu_name, tu_args, _ = tool_uses[0]
+                        tr = resolved_results[0]
+                        response_text = format_finance_response(tu_name, tu_args, tr)
+                        tool_output = ToolOutput(
+                            success=tr.get("success", False),
+                            domain="finance",
+                            tool_name=tu_name,
+                            tool_args=tu_args,
+                            data=tr.get("data", {}),
+                            formatted_text=response_text,
+                            quick_actions=self._build_metadata(tu_name, tr).get("quick_actions"),
+                        )
+                        return AgentResult(
+                            response=response_text,
+                            agent_used=self.name,
+                            tokens_in=total_tokens_in,
+                            tokens_out=total_tokens_out,
+                            metadata=self._build_metadata(tu_name, tr),
+                            tool_output=tool_output,
+                        )
+
+                    # Multiple immediate tools — combined ToolOutput
+                    combined_data = {
+                        "operations": [
+                            {"tool": tu_name, "args": tu_args, "result": tr}
+                            for (tu_name, tu_args, _), tr in zip(tool_uses, resolved_results)
+                        ],
+                    }
+                    combined_texts = [
+                        format_finance_response(tu_name, tu_args, tr)
+                        for (tu_name, tu_args, _), tr in zip(tool_uses, resolved_results)
+                    ]
+                    last_tu_name = tool_uses[-1][0]
+                    last_tr = resolved_results[-1]
                     tool_output = ToolOutput(
-                        success=tool_result.get("success", False),
+                        success=all(tr.get("success", False) for tr in resolved_results),
                         domain="finance",
-                        tool_name=tool_name,
-                        tool_args=tool_args,
-                        data=tool_result.get("data", {}),
-                        formatted_text=response_text,
-                        quick_actions=self._build_metadata(tool_name, tool_result).get("quick_actions"),
+                        tool_name="multi_tool",
+                        tool_args={},
+                        data=combined_data,
+                        formatted_text="\n\n".join(combined_texts),
+                        quick_actions=self._build_metadata(last_tu_name, last_tr).get("quick_actions"),
                     )
                     return AgentResult(
-                        response=response_text,
+                        response=tool_output.formatted_text,
                         agent_used=self.name,
                         tokens_in=total_tokens_in,
                         tokens_out=total_tokens_out,
-                        metadata=self._build_metadata(tool_name, tool_result),
+                        metadata=self._build_metadata(last_tu_name, last_tr),
                         tool_output=tool_output,
                     )
 
@@ -377,84 +419,125 @@ class FinanceAgent(BaseAgent):
                             metadata=qa_metadata,
                         )
 
-                    # LLM called a tool -> execute, append result, loop again
-                    tool_call = choice.message.tool_calls[0]
-                    tool_name = tool_call.function.name
-                    tool_args = json.loads(tool_call.function.arguments)
+                    # LLM called tool(s) -> execute ALL, append results, loop or return
+                    all_tool_calls = choice.message.tool_calls
+                    for tc in all_tool_calls:
+                        logger.info(f"Finance tool call: {tc.function.name}", args=tc.function.arguments[:200])
 
-                    logger.info(f"Finance tool call: {tool_name}", args=tool_args)
+                    # Parse all tool calls
+                    parsed_calls = [
+                        (tc.function.name, json.loads(tc.function.arguments), tc.id)
+                        for tc in all_tool_calls
+                    ]
 
-                    tool_result = await execute_finance_tool(
-                        tool_name, tool_args, tenant_id,
-                        phone=phone,
-                        message_in=message,
-                    )
+                    # Execute all tools in parallel
+                    tool_results = await asyncio.gather(*[
+                        execute_finance_tool(
+                            tc_name, tc_args, tenant_id,
+                            phone=phone, message_in=message,
+                        )
+                        for tc_name, tc_args, _ in parsed_calls
+                    ])
 
-                    # Handle first-time completion marker from executor
-                    if isinstance(tool_result.get("data"), dict) and tool_result["data"].get("first_time_tool"):
-                        result_msg = await self.complete_first_time(phone)
-                        tool_result = {"success": True, "data": {"message": result_msg}}
+                    # Handle first-time completion markers
+                    resolved_results: list[dict[str, Any]] = []
+                    for tr in tool_results:
+                        if isinstance(tr.get("data"), dict) and tr["data"].get("first_time_tool"):
+                            result_msg = await self.complete_first_time(phone)
+                            resolved_results.append({"success": True, "data": {"message": result_msg}})
+                        else:
+                            resolved_results.append(tr)
 
-                    # Append assistant message with tool_calls
+                    # Append assistant message with all tool_calls
                     messages.append(
                         {
                             "role": "assistant",
                             "content": choice.message.content or None,
                             "tool_calls": [
                                 {
-                                    "id": tool_call.id,
+                                    "id": tc.id,
                                     "type": "function",
                                     "function": {
-                                        "name": tool_name,
-                                        "arguments": tool_call.function.arguments,
+                                        "name": tc.function.name,
+                                        "arguments": tc.function.arguments,
                                     },
                                 }
+                                for tc in all_tool_calls
                             ],
                         }
                     )
 
-                    # Append tool result for LLM to reason about
-                    tool_result_for_llm = format_finance_tool_result_for_llm(
-                        tool_name, tool_args, tool_result
-                    )
-                    messages.append(
-                        {
+                    # Append all tool results
+                    for (tc_name, tc_args, tc_id), tr in zip(parsed_calls, resolved_results):
+                        formatted = format_finance_tool_result_for_llm(tc_name, tc_args, tr)
+                        messages.append({
                             "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": tool_result_for_llm,
-                        }
-                    )
+                            "tool_call_id": tc_id,
+                            "content": formatted,
+                        })
 
-                    # These tools need LLM follow-up: continue loop so it can reason.
-                    if tool_name in (
-                        "consultar_presupuesto",
-                        "consultar_reporte",
-                        "completar_configuracion_inicial",
-                        "listar_categorias",
-                        "consultar_ingresos",
-                        "consultar_balance",
-                        "buscar_gastos",
-                    ):
-                        last_tool_name = tool_name
+                    # Tools that need LLM follow-up
+                    _CONTINUE_TOOLS = {
+                        "consultar_presupuesto", "consultar_reporte",
+                        "completar_configuracion_inicial", "listar_categorias",
+                        "consultar_ingresos", "consultar_balance", "buscar_gastos",
+                    }
+
+                    if any(tc_name in _CONTINUE_TOOLS for tc_name, _, _ in parsed_calls):
+                        last_tool_name = parsed_calls[-1][0]
                         continue
 
-                    # Other tools: return formatted response
-                    response_text = format_finance_response(tool_name, tool_args, tool_result)
+                    # All tools are immediate-return — build result
+                    if len(parsed_calls) == 1:
+                        tc_name, tc_args, _ = parsed_calls[0]
+                        tr = resolved_results[0]
+                        response_text = format_finance_response(tc_name, tc_args, tr)
+                        tool_output = ToolOutput(
+                            success=tr.get("success", False),
+                            domain="finance",
+                            tool_name=tc_name,
+                            tool_args=tc_args,
+                            data=tr.get("data", {}),
+                            formatted_text=response_text,
+                            quick_actions=self._build_metadata(tc_name, tr).get("quick_actions"),
+                        )
+                        return AgentResult(
+                            response=response_text,
+                            agent_used=self.name,
+                            tokens_in=total_tokens_in,
+                            tokens_out=total_tokens_out,
+                            metadata=self._build_metadata(tc_name, tr),
+                            tool_output=tool_output,
+                        )
+
+                    # Multiple immediate tools — combined ToolOutput
+                    combined_data = {
+                        "operations": [
+                            {"tool": tc_name, "args": tc_args, "result": tr}
+                            for (tc_name, tc_args, _), tr in zip(parsed_calls, resolved_results)
+                        ],
+                    }
+                    combined_texts = [
+                        format_finance_response(tc_name, tc_args, tr)
+                        for (tc_name, tc_args, _), tr in zip(parsed_calls, resolved_results)
+                    ]
+                    last_tc_name = parsed_calls[-1][0]
+                    last_tr = resolved_results[-1]
                     tool_output = ToolOutput(
-                        success=tool_result.get("success", False),
+                        success=all(tr.get("success", False) for tr in resolved_results),
                         domain="finance",
-                        tool_name=tool_name,
-                        tool_args=tool_args,
-                        data=tool_result.get("data", {}),
-                        formatted_text=response_text,
-                        quick_actions=self._build_metadata(tool_name, tool_result).get("quick_actions"),
+                        tool_name="multi_tool",
+                        tool_args={},
+                        data=combined_data,
+                        formatted_text="\n\n".join(combined_texts),
+                        quick_actions=self._build_metadata(last_tc_name, last_tr).get("quick_actions"),
                     )
                     return AgentResult(
-                        response=response_text,
+                        response=tool_output.formatted_text,
                         agent_used=self.name,
                         tokens_in=total_tokens_in,
                         tokens_out=total_tokens_out,
-                        metadata=self._build_metadata(tool_name, tool_result),
+                        metadata=self._build_metadata(last_tc_name, last_tr),
                         tool_output=tool_output,
                     )
 

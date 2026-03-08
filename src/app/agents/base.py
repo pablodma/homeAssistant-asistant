@@ -250,7 +250,7 @@ class BaseAgent(ABC):
 
     @staticmethod
     def _extract_tool_use(response: Any) -> Optional[tuple[str, dict, str]]:
-        """Extract tool use from Anthropic response.
+        """Extract first tool use from Anthropic response.
 
         Returns:
             (tool_name, tool_args, tool_use_id) or None
@@ -259,6 +259,19 @@ class BaseAgent(ABC):
             if block.type == "tool_use":
                 return block.name, block.input, block.id
         return None
+
+    @staticmethod
+    def _extract_all_tool_uses(response: Any) -> list[tuple[str, dict, str]]:
+        """Extract ALL tool_use blocks from Anthropic response.
+
+        Returns:
+            List of (tool_name, tool_args, tool_use_id) tuples.
+        """
+        return [
+            (block.name, block.input, block.id)
+            for block in response.content
+            if block.type == "tool_use"
+        ]
 
     @staticmethod
     def _extract_text(response: Any) -> str:
