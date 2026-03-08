@@ -1,6 +1,7 @@
 """Base agent class."""
 
 from abc import ABC, abstractmethod
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -15,21 +16,28 @@ from ..services.prompt_loader import PromptLoader
 
 logger = structlog.get_logger()
 
+# Langfuse globals — initialized once at module load
+_langfuse_client: Any = None
+_current_langfuse_trace: ContextVar[Any] = ContextVar("langfuse_trace", default=None)
+
 
 def _init_langfuse() -> bool:
     """Initialize Langfuse if configured. Returns True if enabled."""
+    global _langfuse_client
     settings = _get_settings()
     if not settings.langfuse_enabled or not settings.langfuse_secret_key:
         return False
     try:
         from langfuse import Langfuse
-        Langfuse(
+        _langfuse_client = Langfuse(
             secret_key=settings.langfuse_secret_key,
             public_key=settings.langfuse_public_key,
             host=settings.langfuse_host,
         )
+        logger.info("Langfuse initialized successfully")
         return True
     except Exception:
+        logger.warning("Langfuse initialization failed")
         return False
 
 
@@ -211,6 +219,74 @@ class BaseAgent(ABC):
             The agent's response.
         """
         pass
+
+    # --- Langfuse tracing ---
+
+    def _start_trace(
+        self,
+        *,
+        name: str = "",
+        user_id: str = "",
+        session_id: str = "",
+        input_data: Any = None,
+        metadata: Optional[dict] = None,
+    ) -> Any:
+        """Start a Langfuse trace. Returns the trace object (or None)."""
+        if not self._langfuse_enabled or not _langfuse_client:
+            return None
+        try:
+            trace = _langfuse_client.trace(
+                name=name or f"{self.name}-process",
+                user_id=user_id or None,
+                session_id=session_id or None,
+                input=input_data,
+                metadata=metadata,
+            )
+            _current_langfuse_trace.set(trace)
+            return trace
+        except Exception:
+            logger.debug("Langfuse trace creation failed")
+            return None
+
+    def _end_trace(self, output: Any = None) -> None:
+        """Finalize the current Langfuse trace with output."""
+        trace = _current_langfuse_trace.get(None)
+        if trace is None:
+            return
+        try:
+            trace.update(output=output)
+            _langfuse_client.flush()
+        except Exception:
+            logger.debug("Langfuse trace finalization failed")
+        finally:
+            _current_langfuse_trace.set(None)
+
+    def _log_generation(
+        self,
+        *,
+        name: str = "",
+        model: str = "",
+        input_msgs: Any = None,
+        output_content: Any = None,
+        usage_in: int = 0,
+        usage_out: int = 0,
+        metadata: Optional[dict] = None,
+    ) -> None:
+        """Log an LLM generation to Langfuse, nested under current trace."""
+        if not self._langfuse_enabled or not _langfuse_client:
+            return
+        try:
+            parent = _current_langfuse_trace.get(None) or _langfuse_client
+            parent.generation(
+                name=name or f"{self.name}-generation",
+                model=model,
+                input=input_msgs,
+                output=output_content,
+                usage={"input": usage_in, "output": usage_out},
+                metadata=metadata,
+            )
+        except Exception:
+            logger.debug("Langfuse generation logging failed")
 
     def _init_llm_client(self, provider_setting: str) -> None:
         """Initialize LLM client based on provider setting.

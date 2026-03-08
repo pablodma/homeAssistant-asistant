@@ -263,6 +263,20 @@ class FinanceAgent(BaseAgent):
                     total_tokens_in += t_in
                     total_tokens_out += t_out
 
+                    # Log to Langfuse (nested under supervisor trace)
+                    self._log_generation(
+                        name="finance-generation",
+                        model=self.settings.anthropic_subagent_model,
+                        input_msgs=filtered_msgs[-2:],
+                        output_content=[
+                            {"type": getattr(b, "type", ""), "text": getattr(b, "text", str(b))}
+                            for b in response.content
+                        ],
+                        usage_in=t_in,
+                        usage_out=t_out,
+                        metadata={"stop_reason": response.stop_reason},
+                    )
+
                     # LLM returned text (no tool call) -> final response
                     if response.stop_reason != "tool_use":
                         text = self._extract_text(response)
@@ -407,6 +421,16 @@ class FinanceAgent(BaseAgent):
                     if response.usage:
                         total_tokens_in += response.usage.prompt_tokens
                         total_tokens_out += response.usage.completion_tokens
+
+                    # Log to Langfuse
+                    self._log_generation(
+                        name="finance-generation",
+                        model=self.settings.openai_model,
+                        input_msgs=messages[-2:],
+                        output_content=choice.message.model_dump() if choice else {},
+                        usage_in=response.usage.prompt_tokens if response.usage else 0,
+                        usage_out=response.usage.completion_tokens if response.usage else 0,
+                    )
 
                     # LLM returned text (no tool call) -> final response
                     if not choice.message.tool_calls:

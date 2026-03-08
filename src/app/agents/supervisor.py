@@ -408,6 +408,15 @@ class SupervisorAgent(BaseAgent):
         tool use. Each iteration either returns a final text response or calls
         a domain tool, feeds the structured result back, and continues.
         """
+        # Start Langfuse trace for this message
+        trace = self._start_trace(
+            name="supervisor-process",
+            user_id=phone[-4:],
+            session_id=f"{tenant_id}_{phone}",
+            input_data={"message": message},
+            metadata={"tenant_id": tenant_id, "phone_suffix": phone[-4:]},
+        )
+
         prompt = await self.get_prompt(tenant_id)
 
         now = datetime.now()
@@ -450,12 +459,27 @@ class SupervisorAgent(BaseAgent):
             total_tokens_in += t_in
             total_tokens_out += t_out
 
+            # Log supervisor LLM call to Langfuse
+            self._log_generation(
+                name="supervisor-orchestrate",
+                model=self.settings.anthropic_subagent_model,
+                input_msgs=filtered_msgs,
+                output_content=[
+                    {"type": getattr(b, "type", ""), "text": getattr(b, "text", str(b))}
+                    for b in response.content
+                ],
+                usage_in=t_in,
+                usage_out=t_out,
+                metadata={"stop_reason": response.stop_reason},
+            )
+
             # If supervisor returned text (no tool call) -> final response
             if response.stop_reason != "tool_use":
                 final_text = self._extract_text(response) or "No pude procesar tu solicitud."
                 merged_metadata: dict[str, Any] = {"response_mode": "supervisor"}
                 if collected_quick_actions:
                     merged_metadata["quick_actions"] = collected_quick_actions
+                self._end_trace(output={"response": final_text, "agents_used": agents_used})
                 return AgentResult(
                     response=final_text,
                     agent_used=self.name,
@@ -476,6 +500,7 @@ class SupervisorAgent(BaseAgent):
 
             if not tool_uses:
                 final_text = self._extract_text(response) or "No pude procesar tu solicitud."
+                self._end_trace(output={"response": final_text})
                 return AgentResult(
                     response=final_text,
                     agent_used=self.name,
@@ -572,6 +597,7 @@ class SupervisorAgent(BaseAgent):
             filtered_msgs.append({"role": "user", "content": tool_results_content})
 
         # Max rounds reached without a final text response
+        self._end_trace(output={"error": "max_rounds_reached", "agents_used": agents_used})
         return AgentResult(
             response="No pude completar la operacion. Intenta de nuevo.",
             agent_used=self.name,
