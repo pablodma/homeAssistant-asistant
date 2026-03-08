@@ -502,6 +502,9 @@ Interpretá expresiones relativas:
 
 ---
 
+## Nota: Modo Supervisor
+Cuando se usa con el SupervisorAgent (`SUPERVISOR_MODE_ENABLED=true`), este agente retorna datos estructurados (ToolOutput). El supervisor formula la respuesta final al usuario. Las secciones de formato y tono a continuación aplican solo en modo legacy (RouterAgent).
+
 ## Tono y Estilo
 
 - Español argentino informal (vos, gastaste, tenés)

@@ -104,6 +104,9 @@ class Settings(BaseSettings):
     langfuse_host: str = "https://cloud.langfuse.com"
     langfuse_enabled: bool = False
 
+    # Supervisor mode (replaces Router with Supervisor pattern)
+    supervisor_mode_enabled: bool = False
+
     # Response Guardrails (post-LLM security checks)
     final_security_check_enabled: bool = False
     injection_threshold: float = 0.8

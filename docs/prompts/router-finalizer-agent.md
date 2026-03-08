@@ -1,3 +1,5 @@
+> **DEPRECATED:** Este agente es reemplazado por el SupervisorAgent cuando `SUPERVISOR_MODE_ENABLED=true`. Solo se usa con el RouterAgent legacy cuando `orchestrator_finalizer_enabled=true`.
+
 # Prompt: Router Finalizer Agent
 
 ## Identidad

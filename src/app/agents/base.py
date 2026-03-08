@@ -70,6 +70,24 @@ def openai_tool_to_anthropic(tool: dict[str, Any]) -> dict[str, Any]:
 
 
 @dataclass
+class ToolOutput:
+    """Structured output from a domain tool execution.
+
+    Used by the supervisor pattern: sub-agents return data, the supervisor
+    formulates the user-facing response.
+    """
+
+    success: bool
+    domain: str                                    # "finance", "agenda", etc.
+    tool_name: str                                 # "registrar_gasto"
+    tool_args: dict = field(default_factory=dict)  # args passed to the tool
+    data: dict = field(default_factory=dict)       # raw result from backend/DB
+    formatted_text: str = ""                       # backward-compat formatted text
+    quick_actions: Optional[dict[str, Any]] = None
+    error: Optional[str] = None
+
+
+@dataclass
 class AgentResult:
     """Result from agent processing."""
 
@@ -82,6 +100,7 @@ class AgentResult:
     response_type: Optional[str] = None
     risk_level: Optional[str] = None
     requires_orchestrator_final: bool = False
+    tool_output: Optional[ToolOutput] = None
 
 
 class BaseAgent(ABC):
