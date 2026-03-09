@@ -385,6 +385,8 @@ class SupervisorAgent(BaseAgent):
             "tool_name": tool_output.tool_name,
             "data": tool_output.data,
         }
+        if tool_output.formatted_text:
+            payload["formatted_text"] = tool_output.formatted_text
         if tool_output.quick_actions:
             payload["quick_actions"] = tool_output.quick_actions
         if tool_output.error:
@@ -546,14 +548,14 @@ class SupervisorAgent(BaseAgent):
                     total_tokens_in += sub_result.tokens_in or 0
                     total_tokens_out += sub_result.tokens_out or 0
 
-                    # Extract ToolOutput if available, else build from metadata
+                    # Extract ToolOutput if available, else build from metadata/response
                     tool_output = sub_result.tool_output
-                    if tool_output is None and sub_result.metadata:
-                        meta = sub_result.metadata
+                    if tool_output is None:
+                        meta = sub_result.metadata or {}
                         tool_output = ToolOutput(
                             success=True,
                             domain=agent_name,
-                            tool_name=meta.get("tool", "unknown"),
+                            tool_name=meta.get("tool", "query"),
                             tool_args=meta.get("tool_args", {}),
                             data=(
                                 meta.get("result", {}).get("data", {})
