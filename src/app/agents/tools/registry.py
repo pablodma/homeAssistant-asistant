@@ -22,14 +22,15 @@ FINANCE_TOOLS = [
         "type": "function",
         "function": {
             "name": "consultar_reporte",
-            "description": "Consulta reporte de gastos por período",
+            "description": "Consulta reporte de gastos por período. Usar SIEMPRE para preguntas sobre cuántos gastos hay, cuánto se gastó, o resúmenes financieros.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "period": {
                         "type": "string",
                         "enum": ["day", "week", "month", "year"],
-                        "description": "Período del reporte",
+                        "default": "month",
+                        "description": "Período del reporte. Default: month. Solo usar 'day' si el usuario dice explícitamente 'hoy'.",
                     },
                     "category": {"type": "string", "description": "Filtrar por categoría"},
                 },
