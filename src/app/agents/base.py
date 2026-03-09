@@ -261,6 +261,23 @@ class BaseAgent(ABC):
         finally:
             _current_langfuse_trace.set(None)
 
+    @staticmethod
+    def _safe_serialize(obj: Any) -> Any:
+        """Convert Anthropic/OpenAI objects to JSON-safe dicts."""
+        if obj is None:
+            return None
+        if isinstance(obj, (str, int, float, bool)):
+            return obj
+        if isinstance(obj, dict):
+            return {k: BaseAgent._safe_serialize(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [BaseAgent._safe_serialize(i) for i in obj]
+        if hasattr(obj, "model_dump"):
+            return obj.model_dump()
+        if hasattr(obj, "__dict__"):
+            return {k: str(v)[:500] for k, v in obj.__dict__.items() if not k.startswith("_")}
+        return str(obj)[:500]
+
     def _log_generation(
         self,
         *,
@@ -280,13 +297,13 @@ class BaseAgent(ABC):
             parent.generation(
                 name=name or f"{self.name}-generation",
                 model=model,
-                input=input_msgs,
-                output=output_content,
+                input=self._safe_serialize(input_msgs),
+                output=self._safe_serialize(output_content),
                 usage={"input": usage_in, "output": usage_out},
                 metadata=metadata,
             )
-        except Exception:
-            logger.debug("Langfuse generation logging failed")
+        except Exception as exc:
+            logger.debug("Langfuse generation logging failed", error=str(exc))
 
     def _init_llm_client(self, provider_setting: str) -> None:
         """Initialize LLM client based on provider setting.

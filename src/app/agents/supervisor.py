@@ -463,11 +463,8 @@ class SupervisorAgent(BaseAgent):
             self._log_generation(
                 name="supervisor-orchestrate",
                 model=self.settings.anthropic_subagent_model,
-                input_msgs=filtered_msgs,
-                output_content=[
-                    {"type": getattr(b, "type", ""), "text": getattr(b, "text", str(b))}
-                    for b in response.content
-                ],
+                input_msgs=filtered_msgs[-3:],
+                output_content=response.content,
                 usage_in=t_in,
                 usage_out=t_out,
                 metadata={"stop_reason": response.stop_reason},
